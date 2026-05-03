@@ -1,5 +1,6 @@
 package org.dynadoc.core
 
+import aws.sdk.kotlin.services.dynamodb.model.AttributeValue
 import org.dynadoc.assertDocument
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Test
@@ -7,8 +8,6 @@ import org.junit.jupiter.api.assertThrows
 import org.junit.jupiter.params.ParameterizedTest
 import org.junit.jupiter.params.provider.CsvSource
 import org.junit.jupiter.params.provider.ValueSource
-import software.amazon.awssdk.services.dynamodb.model.AttributeValue
-import java.io.UncheckedIOException
 import java.time.Clock
 import java.time.Duration
 import java.time.Instant
@@ -30,21 +29,21 @@ class AttributeMapperTests {
         value = [
             "{ \"key\": \"abc\" }        | S",
             "{ \"key\": 999 }            | N",
-            "{ \"key\": true }           | BOOL",
-            "{ \"key\": false }          | BOOL",
-            "{ \"key\": null }           | NUL",
+            "{ \"key\": true }           | Bool",
+            "{ \"key\": false }          | Bool",
+            "{ \"key\": null }           | Null",
             "{ \"key\": [ 2, 3 ] }       | L",
             "{ \"key\": { \"sub\": 2 } } | M",
         ],
         delimiter = '|')
-    fun fromDocument_validJson(json: String, type: AttributeValue.Type) {
+    fun fromDocument_validJson(json: String, expectedType: String) {
         val attributes: Map<String, AttributeValue> = fromDocument(json)
 
         assertEquals(4, attributes.size)
-        assertEquals("PK", attributes[PARTITION_KEY]?.s())
-        assertEquals("SK", attributes[SORT_KEY]?.s())
-        assertEquals(2, attributes[VERSION]?.n()?.toLong())
-        assertEquals(type, attributes["key"]?.type())
+        assertEquals("PK", (attributes[PARTITION_KEY] as? AttributeValue.S)?.value)
+        assertEquals("SK", (attributes[SORT_KEY] as? AttributeValue.S)?.value)
+        assertEquals(2L, (attributes[VERSION] as? AttributeValue.N)?.value?.toLong())
+        assertEquals(expectedType, attributes["key"]?.let { it::class.simpleName })
     }
 
     @Test
@@ -52,10 +51,10 @@ class AttributeMapperTests {
         val attributes: Map<String, AttributeValue> = fromDocument(null)
 
         assertEquals(4, attributes.size)
-        assertEquals("PK", attributes[PARTITION_KEY]?.s())
-        assertEquals("SK", attributes[SORT_KEY]?.s())
-        assertEquals(2, attributes[VERSION]?.n()?.toLong())
-        assertEquals(Instant.parse("2024-01-01T20:02:30Z").epochSecond, attributes[DELETED]?.n()?.toLong())
+        assertEquals("PK", (attributes[PARTITION_KEY] as? AttributeValue.S)?.value)
+        assertEquals("SK", (attributes[SORT_KEY] as? AttributeValue.S)?.value)
+        assertEquals(2L, (attributes[VERSION] as? AttributeValue.N)?.value?.toLong())
+        assertEquals(Instant.parse("2024-01-01T20:02:30Z").epochSecond, (attributes[DELETED] as? AttributeValue.N)?.value?.toLong())
     }
 
     @ParameterizedTest

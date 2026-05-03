@@ -1,5 +1,11 @@
 package org.dynadoc.core
 
+import aws.sdk.kotlin.services.dynamodb.DynamoDbClient
+import aws.sdk.kotlin.services.dynamodb.model.AttributeValue
+import aws.sdk.kotlin.services.dynamodb.model.DynamoDbException
+import aws.sdk.kotlin.runtime.auth.credentials.StaticCredentialsProvider
+import aws.smithy.kotlin.runtime.auth.awscredentials.Credentials
+import aws.smithy.kotlin.runtime.net.url.Url
 import kotlinx.coroutines.flow.toList
 import kotlinx.coroutines.runBlocking
 import org.dynadoc.assertDocument
@@ -16,14 +22,6 @@ import org.testcontainers.containers.GenericContainer
 import org.testcontainers.containers.wait.strategy.Wait
 import org.testcontainers.junit.jupiter.Container
 import org.testcontainers.junit.jupiter.Testcontainers
-import software.amazon.awssdk.auth.credentials.AwsBasicCredentials
-import software.amazon.awssdk.auth.credentials.StaticCredentialsProvider
-import software.amazon.awssdk.regions.Region
-import software.amazon.awssdk.services.dynamodb.DynamoDbAsyncClient
-import software.amazon.awssdk.services.dynamodb.model.AttributeValue
-import software.amazon.awssdk.services.dynamodb.model.DynamoDbException
-import java.lang.RuntimeException
-import java.net.URI
 import java.util.*
 import java.util.stream.Stream
 import kotlin.random.asKotlinRandom
@@ -341,12 +339,12 @@ class DynamoDbDocumentStoreTests {
 
         val result =
             store.query {
-                keyConditionExpression("partition_key = :pk AND sort_key BETWEEN :start AND :end")
-                expressionAttributeValues(mapOf(
-                    ":pk" to AttributeValue.fromS(partitionKey),
-                    ":start" to AttributeValue.fromS("ABC03"),
-                    ":end" to AttributeValue.fromS("ABC05")
-                ))
+                keyConditionExpression = "partition_key = :pk AND sort_key BETWEEN :start AND :end"
+                expressionAttributeValues = mapOf(
+                    ":pk" to AttributeValue.S(partitionKey),
+                    ":start" to AttributeValue.S("ABC03"),
+                    ":end" to AttributeValue.S("ABC05")
+                )
             }.toList()
 
         assertDocuments(result, documents.slice(3..5))
@@ -361,12 +359,12 @@ class DynamoDbDocumentStoreTests {
 
         val result =
             store.query {
-                keyConditionExpression("partition_key = :pk")
-                filterExpression("a > :start")
-                expressionAttributeValues(mapOf(
-                    ":pk" to AttributeValue.fromS(partitionKey),
-                    ":start" to AttributeValue.fromN("4"),
-                ))
+                keyConditionExpression = "partition_key = :pk"
+                filterExpression = "a > :start"
+                expressionAttributeValues = mapOf(
+                    ":pk" to AttributeValue.S(partitionKey),
+                    ":start" to AttributeValue.N("4"),
+                )
             }.toList()
 
         assertDocuments(result, documents.slice(5..9))
@@ -381,12 +379,12 @@ class DynamoDbDocumentStoreTests {
 
         val result =
             store.query {
-                keyConditionExpression("partition_key = :pk AND sort_key BETWEEN :start AND :end")
-                expressionAttributeValues(mapOf(
-                    ":pk" to AttributeValue.fromS(partitionKey),
-                    ":start" to AttributeValue.fromS("ABC0120"),
-                    ":end" to AttributeValue.fromS("ABC0180")
-                ))
+                keyConditionExpression = "partition_key = :pk AND sort_key BETWEEN :start AND :end"
+                expressionAttributeValues = mapOf(
+                    ":pk" to AttributeValue.S(partitionKey),
+                    ":start" to AttributeValue.S("ABC0120"),
+                    ":end" to AttributeValue.S("ABC0180")
+                )
             }.toList()
 
         assertDocuments(result, documents.slice(20..80))
@@ -409,11 +407,11 @@ class DynamoDbDocumentStoreTests {
 
         val result =
             store.scan {
-                filterExpression("b BETWEEN :start AND :end")
-                expressionAttributeValues(mapOf(
-                    ":start" to AttributeValue.fromS("val"),
-                    ":end" to AttributeValue.fromS("value 4")
-                ))
+                filterExpression = "b BETWEEN :start AND :end"
+                expressionAttributeValues = mapOf(
+                    ":start" to AttributeValue.S("val"),
+                    ":end" to AttributeValue.S("value 4")
+                )
             }.toList()
 
         assertDocuments(result.sortedBy { it.id.partitionKey }, documents.slice(0..4))
@@ -432,11 +430,11 @@ class DynamoDbDocumentStoreTests {
 
         val result =
             store.scan {
-                filterExpression("partition_key BETWEEN :start AND :end")
-                expressionAttributeValues(mapOf(
-                    ":start" to AttributeValue.fromS("${partitionKey}_120"),
-                    ":end" to AttributeValue.fromS("${partitionKey}_180")
-                ))
+                filterExpression = "partition_key BETWEEN :start AND :end"
+                expressionAttributeValues = mapOf(
+                    ":start" to AttributeValue.S("${partitionKey}_120"),
+                    ":end" to AttributeValue.S("${partitionKey}_180")
+                )
             }.toList()
 
         assertDocuments(result.sortedBy { it.id.partitionKey }, documents.slice(20..80))
@@ -523,7 +521,7 @@ class DynamoDbDocumentStoreTests {
     //region Setup
 
     private companion object Setup {
-        lateinit var client: DynamoDbAsyncClient
+        lateinit var client: DynamoDbClient
         var port: Int = Random().asKotlinRandom().nextInt(10000, 32000)
 
         @JvmStatic
@@ -541,12 +539,13 @@ class DynamoDbDocumentStoreTests {
         @BeforeAll
         @JvmStatic
         fun globalSetup() {
-            client = DynamoDbAsyncClient.builder()
-                .endpointOverride(URI.create("http://localhost:$port"))
-                .credentialsProvider(StaticCredentialsProvider.create(
-                    AwsBasicCredentials.create("NONE", "NONE")))
-                .region(Region.EU_WEST_1)
-                .build()
+            client = DynamoDbClient {
+                endpointUrl = Url.parse("http://localhost:$port")
+                credentialsProvider = StaticCredentialsProvider(
+                    Credentials(accessKeyId = "NONE", secretAccessKey = "NONE")
+                )
+                region = "eu-west-1"
+            }
 
             require(container.isRunning()) { container.logs }
             runBlocking {

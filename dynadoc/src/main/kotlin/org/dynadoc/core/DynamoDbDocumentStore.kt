@@ -1,9 +1,13 @@
 package org.dynadoc.core
 
+import aws.sdk.kotlin.services.dynamodb.DynamoDbClient
+import aws.sdk.kotlin.services.dynamodb.batchGetItem
+import aws.sdk.kotlin.services.dynamodb.createTable
+import aws.sdk.kotlin.services.dynamodb.model.*
+import aws.sdk.kotlin.services.dynamodb.query
+import aws.sdk.kotlin.services.dynamodb.scan
+import aws.sdk.kotlin.services.dynamodb.transactWriteItems
 import kotlinx.coroutines.flow.*
-import kotlinx.coroutines.future.await
-import software.amazon.awssdk.services.dynamodb.DynamoDbAsyncClient
-import software.amazon.awssdk.services.dynamodb.model.*
 import java.time.Clock
 import java.time.Duration
 
@@ -11,7 +15,7 @@ import java.time.Duration
  * Represents an implementation of the [DocumentStore] interface that relies on DynamoDB for persistence.
  */
 class DynamoDbDocumentStore(
-    private val client: DynamoDbAsyncClient,
+    private val client: DynamoDbClient,
     private val tableName: String,
     expiration: Duration = Duration.ofDays(30),
     clock: Clock = Clock.systemUTC()
@@ -31,54 +35,50 @@ class DynamoDbDocumentStore(
             if (version == 0L) {
                 null
             } else {
-                mapOf(":version" to AttributeValue.fromN(version.toString()))
+                mapOf(":version" to AttributeValue.N(version.toString()))
             }
 
         val updates: Sequence<TransactWriteItem> = updatedDocuments.asSequence().map { document ->
-                TransactWriteItem.builder()
-                    .put(Put.builder()
-                        .tableName(tableName)
-                        .item(attributeMapper.fromDocument(document))
-                        .conditionExpression(conditionExpression(document.version))
-                        .expressionAttributeValues(expressionAttributeValues(document.version))
-                        .build())
-                    .build()
+            TransactWriteItem {
+                put = Put {
+                    tableName = this@DynamoDbDocumentStore.tableName
+                    item = attributeMapper.fromDocument(document)
+                    conditionExpression = conditionExpression(document.version)
+                    expressionAttributeValues = expressionAttributeValues(document.version)
+                }
             }
+        }
 
         val checks: Sequence<TransactWriteItem> = checkedDocuments.asSequence().map { document ->
-                TransactWriteItem.builder()
-                    .conditionCheck(ConditionCheck.builder()
-                        .tableName(tableName)
-                        .key(attributeMapper.fromDocumentKey(document.id))
-                        .conditionExpression(conditionExpression(document.version))
-                        .expressionAttributeValues(expressionAttributeValues(document.version))
-                        .build())
-                    .build()
+            TransactWriteItem {
+                conditionCheck = ConditionCheck {
+                    tableName = this@DynamoDbDocumentStore.tableName
+                    key = attributeMapper.fromDocumentKey(document.id)
+                    conditionExpression = conditionExpression(document.version)
+                    expressionAttributeValues = expressionAttributeValues(document.version)
+                }
             }
+        }
 
-        val writeItems: List<TransactWriteItem> = (updates + checks).toList();
+        val writeItems: List<TransactWriteItem> = (updates + checks).toList()
 
         if (writeItems.isEmpty()) {
             return
         }
 
         try {
-            val write: TransactWriteItemsRequest = TransactWriteItemsRequest.builder()
-                .transactItems(writeItems)
-                .build()
-
-            client.transactWriteItems(write).await()
-
+            client.transactWriteItems {
+                transactItems = writeItems
+            }
         } catch (exception: TransactionCanceledException) {
-            val conditionCheckFailureIndex: Int = exception.cancellationReasons()
-                ?. indexOfFirst { it.code() == "ConditionalCheckFailed" }
+            val conditionCheckFailureIndex: Int = exception.cancellationReasons
+                ?.indexOfFirst { it.code == "ConditionalCheckFailed" }
                 ?: -1
 
             if (conditionCheckFailureIndex >= 0) {
                 val failedItem: TransactWriteItem = writeItems[conditionCheckFailureIndex]
                 val keyAttributes: Map<String, AttributeValue> =
-                    failedItem.put()?.item()
-                    ?: failedItem.conditionCheck().key()
+                    checkNotNull(failedItem.put?.item ?: failedItem.conditionCheck?.key)
 
                 throw UpdateConflictException(attributeMapper.toDocumentKey(keyAttributes))
             } else {
@@ -94,115 +94,95 @@ class DynamoDbDocumentStore(
             return flowOf()
         }
 
-        val request: BatchGetItemRequest = BatchGetItemRequest.builder()
-            .requestItems(mapOf(
-                tableName to KeysAndAttributes.builder()
-                    .keys(idList.distinct().map(attributeMapper::fromDocumentKey))
-                    .consistentRead(true)
-                    .build()
-                ))
-            .build()
-
         return flow {
-            val responses = client.batchGetItem(request).await().responses()
+            val response = client.batchGetItem {
+                requestItems = mapOf(
+                    tableName to KeysAndAttributes {
+                        keys = idList.distinct().map(attributeMapper::fromDocumentKey)
+                        consistentRead = true
+                    }
+                )
+            }
 
+            val responses = response.responses
             if (responses != null) {
                 val documents: Map<DocumentKey, Document> = responses.values
                     .flatten()
                     .map(attributeMapper::toDocument)
                     .associateBy { it.id }
 
-                val result = idList
-                    .map { id ->
-                        documents[id] ?: Document(id, null, 0)
-                    }
+                val result = idList.map { id ->
+                    documents[id] ?: Document(id, null, 0)
+                }
 
                 result.asFlow().collect(this)
             }
         }
     }
 
-    fun query(queryRequest: QueryRequest.Builder.() -> Unit): Flow<Document> {
-        val query: QueryRequest = QueryRequest.builder()
-            .tableName(tableName)
-            .apply(queryRequest)
-            .build()
-
-        return flow {
-            var currentPageQuery = query
-
-            while (true) {
-                val response = client.query(currentPageQuery).await()
-
-                for (item in response.items()) {
-                    emit(attributeMapper.toDocument(item))
+    fun query(queryRequest: QueryRequest.Builder.() -> Unit): Flow<Document> = flow {
+        var startKey: Map<String, AttributeValue>? = null
+        while (true) {
+            val currentStartKey = startKey
+            val response = client.query {
+                tableName = this@DynamoDbDocumentStore.tableName
+                queryRequest()
+                if (currentStartKey != null) {
+                    exclusiveStartKey = currentStartKey
                 }
-
-                if (!response.hasLastEvaluatedKey()) {
-                    break
-                }
-
-                currentPageQuery = query.toBuilder()
-                    .exclusiveStartKey(response.lastEvaluatedKey())
-                    .build()
             }
+            for (item in response.items ?: emptyList()) {
+                emit(attributeMapper.toDocument(item))
+            }
+            startKey = response.lastEvaluatedKey?.takeIf { it.isNotEmpty() }
+            if (startKey == null) break
         }
     }
 
-    fun scan(scanRequest: ScanRequest.Builder.() -> Unit): Flow<Document> {
-        val query: ScanRequest = ScanRequest.builder()
-            .tableName(tableName)
-            .apply(scanRequest)
-            .build()
-
-        return flow {
-            var currentPageQuery = query
-
-            while (true) {
-                val response = client.scan(currentPageQuery).await()
-
-                for (item in response.items()) {
-                    emit(attributeMapper.toDocument(item))
+    fun scan(scanRequest: ScanRequest.Builder.() -> Unit): Flow<Document> = flow {
+        var startKey: Map<String, AttributeValue>? = null
+        while (true) {
+            val currentStartKey = startKey
+            val response = client.scan {
+                tableName = this@DynamoDbDocumentStore.tableName
+                scanRequest()
+                if (currentStartKey != null) {
+                    exclusiveStartKey = currentStartKey
                 }
-
-                if (!response.hasLastEvaluatedKey()) {
-                    break
-                }
-
-                currentPageQuery = query.toBuilder()
-                    .exclusiveStartKey(response.lastEvaluatedKey())
-                    .build()
             }
+            for (item in response.items ?: emptyList()) {
+                emit(attributeMapper.toDocument(item))
+            }
+            startKey = response.lastEvaluatedKey?.takeIf { it.isNotEmpty() }
+            if (startKey == null) break
         }
     }
 
     suspend fun createTable(configure: CreateTableRequest.Builder.() -> Unit = { }) {
-        val request: CreateTableRequest = CreateTableRequest.builder()
-            .tableName(tableName)
-            .keySchema(listOf(
-                KeySchemaElement.builder()
-                    .attributeName(PARTITION_KEY)
-                    .keyType(KeyType.HASH)
-                    .build(),
-                KeySchemaElement.builder()
-                    .attributeName(SORT_KEY)
-                    .keyType(KeyType.RANGE)
-                    .build()
-            ))
-            .attributeDefinitions(listOf(
-                AttributeDefinition.builder()
-                    .attributeName(PARTITION_KEY)
-                    .attributeType(ScalarAttributeType.S)
-                    .build(),
-                AttributeDefinition.builder()
-                    .attributeName(SORT_KEY)
-                    .attributeType(ScalarAttributeType.S)
-                    .build()
-            ))
-            .billingMode(BillingMode.PAY_PER_REQUEST)
-            .apply(configure)
-            .build()
-
-        client.createTable(request).await()
+        client.createTable {
+            tableName = this@DynamoDbDocumentStore.tableName
+            keySchema = listOf(
+                KeySchemaElement {
+                    attributeName = PARTITION_KEY
+                    keyType = KeyType.Hash
+                },
+                KeySchemaElement {
+                    attributeName = SORT_KEY
+                    keyType = KeyType.Range
+                }
+            )
+            attributeDefinitions = listOf(
+                AttributeDefinition {
+                    attributeName = PARTITION_KEY
+                    attributeType = ScalarAttributeType.S
+                },
+                AttributeDefinition {
+                    attributeName = SORT_KEY
+                    attributeType = ScalarAttributeType.S
+                }
+            )
+            billingMode = BillingMode.PayPerRequest
+            configure()
+        }
     }
 }

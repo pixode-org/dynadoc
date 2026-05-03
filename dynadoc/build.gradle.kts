@@ -1,14 +1,15 @@
 dependencies {
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-core:1.8.1")
-    api("software.amazon.awssdk:dynamodb-enhanced:[2.21.0, 3[")
+    implementation("org.jetbrains.kotlinx:kotlinx-serialization-json:1.7.3")
+    api("aws.sdk.kotlin:dynamodb-jvm:[1.3.0, 2[")
 
     testImplementation(kotlin("test"))
 
-    testImplementation(platform("org.junit:junit-bom:5.10.2"))
+    testImplementation(platform("org.junit:junit-bom:5.14.4"))
     testImplementation("org.junit.jupiter:junit-jupiter")
-    testImplementation("io.mockk:mockk:1.13.11")
-    testImplementation("org.testcontainers:testcontainers:1.19.8")
-    testImplementation("org.testcontainers:junit-jupiter:1.19.8")
+    testImplementation("io.mockk:mockk:1.14.9")
+    testImplementation("org.testcontainers:testcontainers:2.0.5")
+    testImplementation("org.testcontainers:junit-jupiter:2.0.5")
     testImplementation("org.skyscreamer:jsonassert:1.5.1")
 
     testRuntimeOnly("org.junit.platform:junit-platform-launcher")

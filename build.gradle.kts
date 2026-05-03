@@ -2,12 +2,12 @@ import org.jetbrains.kotlin.gradle.dsl.JvmTarget
 
 allprojects {
     group = "org.dynadoc"
-    version = "1.3.4"
+    version = "2.0.0"
 }
 
 plugins {
     // Apply the org.jetbrains.kotlin.jvm plugin to add support for Kotlin.
-    kotlin("jvm") version "2.0.0"
+    kotlin("jvm") version "2.3.21"
     id("org.jetbrains.kotlinx.kover") version "0.8.0"
     id("maven-publish")
     id("signing")
