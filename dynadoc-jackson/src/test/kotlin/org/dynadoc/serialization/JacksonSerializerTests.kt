@@ -1,5 +1,7 @@
 package org.dynadoc.serialization
 
+import com.fasterxml.jackson.annotation.JsonAnyGetter
+import com.fasterxml.jackson.annotation.JsonAnySetter
 import org.dynadoc.core.Document
 import org.dynadoc.core.DocumentKey
 import org.dynadoc.serialization.JacksonSerializerTests.MethodSources.PREFIX
@@ -20,6 +22,16 @@ class JacksonSerializerTests {
     @ParameterizedTest
     @MethodSource("$PREFIX#jsonValid")
     fun serialize_valid(json: String, type: KType, value: Any) {
+        val result: String = DefaultJsonSerializer.serialize(value)
+
+        JSONAssert.assertEquals(json, result, true)
+    }
+
+    @Test
+    fun serialize_unknownField() {
+        val json = """ { "key": "test", "a": 3, "b": "value" } """
+        val value: JsonUnknownFields = DefaultJsonSerializer.deserialize(json, typeOf<JsonUnknownFields>())
+
         val result: String = DefaultJsonSerializer.serialize(value)
 
         JSONAssert.assertEquals(json, result, true)
@@ -182,3 +194,10 @@ private data class JsonMap(val key: Map<String, Long>)
 private data class JsonStringNullable(val key: String?)
 
 private data class JsonStringDefault(val key: String = "default")
+
+private data class JsonUnknownFields(
+    val key: String,
+    @get: JsonAnyGetter
+    @param: JsonAnySetter
+    val unknownFields: Map<String, Any> = hashMapOf()
+)
