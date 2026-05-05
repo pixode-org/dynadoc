@@ -1,6 +1,6 @@
 # Dynadoc
 
-<a href="https://central.sonatype.com/artifact/org.dynadoc/dynadoc">![Maven Central Version](https://img.shields.io/maven-central/v/org.dynadoc/dynadoc)</a>
+<a href="https://central.sonatype.com/artifact/org.pixode/dynadoc-core">![Maven Central Version](https://img.shields.io/maven-central/v/org.pixode/dynadoc-core)</a>
 
 Dynadoc is a Kotlin library for using DynamoDB as a JSON document store. It manages the mapping between Kotlin objects and JSON documents.
 
@@ -52,8 +52,8 @@ data class DocumentKey(
 
 The following dependencies should be added to the project:
 
-- [dynadoc](https://central.sonatype.com/artifact/org.dynadoc/dynadoc): The core library, responsible for storing and retrieving JSON documents in DynamoDB.
-- [dynadoc-kotlinx-serialization](https://central.sonatype.com/artifact/org.dynadoc/dynadoc-kotlinx-serialization): The library in charge of serializing and deserializing JSON into Kotlin objects. This library relies internally on the `kotlinx-serialization-json` library to handle JSON serialization.
+- [dynadoc](https://central.sonatype.com/artifact/org.pixode/dynadoc-core): The core library, responsible for storing and retrieving JSON documents in DynamoDB.
+- [dynadoc-kotlinx-serialization](https://central.sonatype.com/artifact/org.pixode/dynadoc-kotlinx-serialization): The library in charge of serializing and deserializing JSON into Kotlin objects. This library relies internally on the `kotlinx-serialization-json` library to handle JSON serialization.
 
 ### Initialization
 

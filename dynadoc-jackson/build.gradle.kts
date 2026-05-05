@@ -21,7 +21,7 @@ publishing {
             pom {
                 name = "Dynadoc Jackson"
                 description = "Dynadoc is a Kotlin library for using DynamoDB as a JSON document store."
-                url = "https://github.com/pgdoc/dynadoc"
+                url = "https://github.com/pixode-org/dynadoc"
                 licenses {
                     license {
                         name = "The Apache License, Version 2.0"
@@ -35,8 +35,8 @@ publishing {
                     }
                 }
                 scm {
-                    connection = "scm:git:git://github.com/pgdoc/dynadoc.git"
-                    url = "https://github.com/pgdoc/dynadoc/tree/master"
+                    connection = "scm:git:git://github.com/pixode-org/dynadoc.git"
+                    url = "https://github.com/pixode-org/dynadoc/tree/main"
                 }
             }
         }
