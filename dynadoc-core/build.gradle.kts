@@ -1,13 +1,15 @@
 dependencies {
-    api(project(":dynadoc-core"))
-
-    api("com.fasterxml.jackson.module:jackson-module-kotlin:[2.15,)")
+    implementation("org.jetbrains.kotlinx:kotlinx-coroutines-core:1.8.1")
+    implementation("org.jetbrains.kotlinx:kotlinx-serialization-json:1.7.3")
+    api("aws.sdk.kotlin:dynamodb-jvm:[1.3.0, 2[")
 
     testImplementation(kotlin("test"))
 
-    testImplementation(platform("org.junit:junit-bom:5.10.2"))
+    testImplementation(platform("org.junit:junit-bom:5.14.4"))
     testImplementation("org.junit.jupiter:junit-jupiter")
-    testImplementation("io.mockk:mockk:1.13.11")
+    testImplementation("io.mockk:mockk:1.14.9")
+    testImplementation("org.testcontainers:testcontainers:2.0.5")
+    testImplementation("org.testcontainers:junit-jupiter:1.21.4")
     testImplementation("org.skyscreamer:jsonassert:1.5.1")
 
     testRuntimeOnly("org.junit.platform:junit-platform-launcher")
@@ -19,7 +21,7 @@ publishing {
             from(components["java"])
 
             pom {
-                name = "Dynadoc Jackson"
+                name = "Dynadoc"
                 description = "Dynadoc is a Kotlin library for using DynamoDB as a JSON document store."
                 url = "https://github.com/pgdoc/dynadoc"
                 licenses {

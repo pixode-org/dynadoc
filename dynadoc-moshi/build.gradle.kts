@@ -1,5 +1,5 @@
 dependencies {
-    api(project(":dynadoc"))
+    api(project(":dynadoc-core"))
 
     api("com.squareup.moshi:moshi-kotlin:[1.15,)")
 

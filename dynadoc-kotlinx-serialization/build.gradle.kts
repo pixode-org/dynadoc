@@ -3,7 +3,7 @@ plugins {
 }
 
 dependencies {
-    api(project(":dynadoc"))
+    api(project(":dynadoc-core"))
 
     api("org.jetbrains.kotlinx:kotlinx-serialization-json:[1.6.0,1.7[")
 

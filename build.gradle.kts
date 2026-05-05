@@ -1,7 +1,7 @@
 import org.jetbrains.kotlin.gradle.dsl.JvmTarget
 
 allprojects {
-    group = "org.dynadoc"
+    group = "org.pixode"
     version = "2.0.0"
 }
 
@@ -51,7 +51,7 @@ repositories {
 }
 
 dependencies {
-    kover(project(":dynadoc"))
+    kover(project(":dynadoc-core"))
     kover(project(":dynadoc-kotlinx-serialization"))
     kover(project(":dynadoc-jackson"))
     kover(project(":dynadoc-moshi"))
