@@ -31,12 +31,21 @@ class EntityStore(
         )
     }
 
+
     /**
-     * Retrieves a document given its ID, represented as a [JsonEntity] object.
+     * Retrieves multiple documents of the same type given their IDs, represented as [JsonEntity] objects.
      */
     suspend fun <T : Any> getEntities(ids: Iterable<DocumentKey>, type: KType): List<JsonEntity<T?>> {
         val result = documentStore.getDocuments(ids).toList()
         return result.map { jsonSerializer.fromDocument(it, type) }
+    }
+
+    /**
+     * Retrieves multiple documents of different types given their IDs, represented as [JsonEntity] objects.
+     */
+    suspend fun getEntities(ids: Map<DocumentKey, KType>): List<JsonEntity<Any?>> {
+        val result = documentStore.getDocuments(ids.keys).toList()
+        return result.map { jsonSerializer.fromDocument(it, ids.getValue(it.id)) }
     }
 }
 

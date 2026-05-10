@@ -13,8 +13,11 @@ import org.pixode.dynadoc.serialization.TestSerializer.jsonFor
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Test
 import java.math.BigDecimal
+import kotlin.reflect.KType
+import kotlin.reflect.typeOf
 
-val ids = (0..9).map { i -> DocumentKey("document_$i", "KEY") }
+val ids = (0..9).map { i -> DocumentKey("document_$i", "STRING") }
+val idsInt = (0..9).map { i -> DocumentKey(i.toString(), "INT") }
 val idsNull = (0..9).map { i -> DocumentKey("document_$i", "NULL") }
 
 class EntityStoreTests {
@@ -25,7 +28,11 @@ class EntityStoreTests {
                 .mapIndexed { index, key ->
                     Document(
                         id = key,
-                        body = if (key.sortKey == "NULL") { null } else { jsonFor(key.partitionKey) },
+                        body = when (key.sortKey) {
+                            "STRING" -> jsonFor(key.partitionKey)
+                            "INT" -> jsonFor(key.partitionKey.toInt())
+                            else -> null
+                        },
                         version = index + 1L
                     )
                 }
@@ -99,13 +106,33 @@ class EntityStoreTests {
     //region getEntities
 
     @Test
-    fun getEntities_multiple() = runBlocking {
+    fun getEntities_multipleHomogeneous() = runBlocking {
         val result: List<JsonEntity<String?>> = store.getEntities(listOf(ids[0], idsNull[1], ids[2]))
 
         assertEquals(3, result.size)
         assertEntity(result[0], ids[0], "document_0", 1)
         assertEntity(result[1], idsNull[1], null, 2)
         assertEntity(result[2], ids[2], "document_2", 3)
+    }
+
+    @Test
+    fun getEntities_multipleHeterogeneous() = runBlocking {
+        val result: List<JsonEntity<Any?>> = store.getEntities(
+            mapOf(
+                ids[0] to typeOf<String>(),
+                idsNull[1] to typeOf<String>(),
+                idsInt[2] to typeOf<Int>(),
+                idsNull[3] to typeOf<Int>(),
+            )
+        )
+
+        println(result)
+
+        assertEquals(4, result.size)
+        assertEntity(result[0], ids[0], "document_0", 1)
+        assertEntity(result[1], idsNull[1], null, 2)
+        assertEntity(result[2], idsInt[2], 2, 3)
+        assertEntity(result[3], idsNull[3], null, 4)
     }
 
     @Test
