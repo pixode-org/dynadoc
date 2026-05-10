@@ -43,9 +43,11 @@ class EntityStore(
     /**
      * Retrieves multiple documents of different types given their IDs, represented as [JsonEntity] objects.
      */
-    suspend fun getEntities(ids: Map<DocumentKey, KType>): List<JsonEntity<Any?>> {
-        val result = documentStore.getDocuments(ids.keys).toList()
-        return result.map { jsonSerializer.fromDocument(it, ids.getValue(it.id)) }
+    suspend fun getEntities(ids: List<Pair<DocumentKey, KType>>): List<JsonEntity<Any?>> {
+        val result = documentStore.getDocuments(ids.map { it.first }).toList()
+        return result.mapIndexed { index, document ->
+            jsonSerializer.fromDocument(document, ids[index].second)
+        }
     }
 }
 

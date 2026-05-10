@@ -13,7 +13,6 @@ import org.pixode.dynadoc.serialization.TestSerializer.jsonFor
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Test
 import java.math.BigDecimal
-import kotlin.reflect.KType
 import kotlin.reflect.typeOf
 
 val ids = (0..9).map { i -> DocumentKey("document_$i", "STRING") }
@@ -21,24 +20,7 @@ val idsInt = (0..9).map { i -> DocumentKey(i.toString(), "INT") }
 val idsNull = (0..9).map { i -> DocumentKey("document_$i", "NULL") }
 
 class EntityStoreTests {
-    private val documentStore: DocumentStore = mockk {
-        coEvery { updateDocuments(any(), any()) } returns Unit
-        coEvery { getDocuments(any()) } answers {
-            firstArg<Iterable<DocumentKey>>()
-                .mapIndexed { index, key ->
-                    Document(
-                        id = key,
-                        body = when (key.sortKey) {
-                            "STRING" -> jsonFor(key.partitionKey)
-                            "INT" -> jsonFor(key.partitionKey.toInt())
-                            else -> null
-                        },
-                        version = index + 1L
-                    )
-                }
-                .asFlow()
-        }
-    }
+    private val documentStore: DocumentStore = TestSerializer.createMockDocumentStore()
     private val store: EntityStore = EntityStore(documentStore, TestSerializer)
 
     //region updateEntities
@@ -118,7 +100,7 @@ class EntityStoreTests {
     @Test
     fun getEntities_multipleHeterogeneous() = runBlocking {
         val result: List<JsonEntity<Any?>> = store.getEntities(
-            mapOf(
+            listOf(
                 ids[0] to typeOf<String>(),
                 idsNull[1] to typeOf<String>(),
                 idsInt[2] to typeOf<Int>(),
