@@ -9,7 +9,7 @@ import kotlin.reflect.jvm.javaType
 import kotlin.reflect.jvm.jvmErasure
 
 class MoshiSerializer(
-    private val moshi: Moshi
+    private val moshi: Moshi,
 ) : JsonSerializer {
 
     @Suppress("UNCHECKED_CAST")

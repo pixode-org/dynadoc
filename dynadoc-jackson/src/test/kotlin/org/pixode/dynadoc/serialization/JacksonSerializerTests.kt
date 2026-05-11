@@ -48,7 +48,7 @@ class JacksonSerializerTests {
     @ParameterizedTest
     @ValueSource(strings = [
         """ { } """,
-        """ { "key": null } """
+        """ { "key": null } """,
     ])
     fun deserialize_null(json: String) {
         val result: JsonStringNullable = DefaultJsonSerializer.deserialize(json, typeOf<JsonStringNullable>())
@@ -59,7 +59,7 @@ class JacksonSerializerTests {
     @ParameterizedTest
     @ValueSource(strings = [
         """ { } """,
-        """ { "key": null } """
+        """ { "key": null } """,
     ])
     fun deserialize_default(json: String) {
         val result: JsonStringDefault = DefaultJsonSerializer.deserialize(json, typeOf<JsonStringDefault>())
@@ -80,7 +80,7 @@ class JacksonSerializerTests {
         val document: JsonEntity<JsonStringValue> = JsonEntity(
             id = DocumentKey("PK", "SK"),
             entity = JsonStringValue("value"),
-            version = 1
+            version = 1,
         )
 
         val result: Document = DefaultJsonSerializer.toDocument(document)
@@ -93,7 +93,7 @@ class JacksonSerializerTests {
         val document = Document(
             id = DocumentKey("PK", "SK"),
             body = """ { "key": "value" } """,
-            version = 1
+            version = 1,
         )
 
         val result: JsonEntity<JsonStringValue?> = DefaultJsonSerializer.fromDocument(document)
@@ -112,55 +112,55 @@ class JacksonSerializerTests {
                 Arguments.of(
                     """ { "key": "value" } """,
                     typeOf<JsonStringValue>(),
-                    JsonStringValue("value")
+                    JsonStringValue("value"),
                 ),
                 Arguments.of(
                     """ { "key": 1234567890.12345 } """,
                     typeOf<JsonNumberValue>(),
-                    JsonNumberValue(1234567890.12345)
+                    JsonNumberValue(1234567890.12345),
                 ),
                 Arguments.of(
                     """ { "key": true } """,
                     typeOf<JsonBooleanValue>(),
-                    JsonBooleanValue(true)
+                    JsonBooleanValue(true),
                 ),
                 Arguments.of(
                     """ { "key": [10, 20, 30] } """,
                     typeOf<JsonList>(),
-                    JsonList(listOf(10, 20, 30))
+                    JsonList(listOf(10, 20, 30)),
                 ),
                 Arguments.of(
                     """ { "key": [] } """,
                     typeOf<JsonList>(),
-                    JsonList(emptyList())
+                    JsonList(emptyList()),
                 ),
                 Arguments.of(
                     """ { "key": { "a": 1, "b": 2 } } """,
                     typeOf<JsonMap>(),
                     JsonMap(mapOf(
                         "a" to 1,
-                        "b" to 2
-                    ))
+                        "b" to 2,
+                    )),
                 ),
                 Arguments.of(
                     """ { "key": { } } """,
                     typeOf<JsonMap>(),
-                    JsonMap(mapOf())
+                    JsonMap(mapOf()),
                 ),
                 Arguments.of(
                     """ { "key": "value" } """,
                     typeOf<JsonStringNullable>(),
-                    JsonStringNullable("value")
+                    JsonStringNullable("value"),
                 ),
                 Arguments.of(
                     """ { "key": null } """,
                     typeOf<JsonStringNullable>(),
-                    JsonStringNullable(null)
+                    JsonStringNullable(null),
                 ),
                 Arguments.of(
                     """ { "key": "value" } """,
                     typeOf<JsonStringDefault>(),
-                    JsonStringDefault("value")
+                    JsonStringDefault("value"),
                 ),
             )
         }
@@ -170,11 +170,11 @@ class JacksonSerializerTests {
             return Stream.of(
                 Arguments.of(
                     """ { "key": null } """,
-                    typeOf<JsonStringValue>()
+                    typeOf<JsonStringValue>(),
                 ),
                 Arguments.of(
                     """ { } """,
-                    typeOf<JsonStringValue>()
+                    typeOf<JsonStringValue>(),
                 ),
             )
         }
@@ -199,5 +199,5 @@ private data class JsonUnknownFields(
     val key: String,
     @get: JsonAnyGetter
     @param: JsonAnySetter
-    val unknownFields: Map<String, Any> = hashMapOf()
+    val unknownFields: Map<String, Any> = hashMapOf(),
 )

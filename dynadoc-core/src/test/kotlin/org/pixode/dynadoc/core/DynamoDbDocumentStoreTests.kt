@@ -106,7 +106,7 @@ class DynamoDbDocumentStoreTests {
     fun updateDocuments_noUpdate() = runBlocking {
         store.updateDocuments(
             updatedDocuments = emptyList(),
-            checkedDocuments = emptyList()
+            checkedDocuments = emptyList(),
         )
     }
 
@@ -124,7 +124,7 @@ class DynamoDbDocumentStoreTests {
         "{ \"a\":1, \"$DELETED\":2 }",
         " } { ",
         "a",
-        "{"
+        "{",
     ])
     fun updateDocuments_invalidJson(to: String) = runBlocking {
         assertThrows<IllegalArgumentException>(
@@ -215,12 +215,12 @@ class DynamoDbDocumentStoreTests {
         store.updateDocuments(
             updatedDocuments = listOf(
                 Document(ids[0], "{\"v\":\"1\"}", 1),
-                Document(ids[2], "{\"v\":\"2\"}", 0)
+                Document(ids[2], "{\"v\":\"2\"}", 0),
             ),
             checkedDocuments = listOf(
                 Document(ids[1], "{\"v\":\"3\"}", 1),
-                Document(ids[3], "{\"v\":\"4\"}", 0)
-            )
+                Document(ids[3], "{\"v\":\"4\"}", 0),
+            ),
         )
 
         val document1 = store.getDocument(ids[0])
@@ -244,12 +244,12 @@ class DynamoDbDocumentStoreTests {
                 if (checkOnly) {
                     store.updateDocuments(
                         updatedDocuments = listOf(Document(ids[0], JSON_2, 1)),
-                        checkedDocuments = listOf(Document(ids[1], JSON_3, 10))
+                        checkedDocuments = listOf(Document(ids[1], JSON_3, 10)),
                     )
                 } else {
                     store.updateDocuments(
                         Document(ids[0], JSON_2, 1),
-                        Document(ids[1], JSON_3, 10)
+                        Document(ids[1], JSON_3, 10),
                     )
                 }
             })
@@ -270,7 +270,7 @@ class DynamoDbDocumentStoreTests {
             fun() = runBlocking {
                 store.updateDocuments(
                     Document(ids[0], JSON_2, 1),
-                    Document(ids[1], JSON_1MB, 0)
+                    Document(ids[1], JSON_1MB, 0),
                 )
             })
 
@@ -343,7 +343,7 @@ class DynamoDbDocumentStoreTests {
                 expressionAttributeValues = mapOf(
                     ":pk" to AttributeValue.S(partitionKey),
                     ":start" to AttributeValue.S("ABC03"),
-                    ":end" to AttributeValue.S("ABC05")
+                    ":end" to AttributeValue.S("ABC05"),
                 )
             }.toList()
 
@@ -383,7 +383,7 @@ class DynamoDbDocumentStoreTests {
                 expressionAttributeValues = mapOf(
                     ":pk" to AttributeValue.S(partitionKey),
                     ":start" to AttributeValue.S("ABC0120"),
-                    ":end" to AttributeValue.S("ABC0180")
+                    ":end" to AttributeValue.S("ABC0180"),
                 )
             }.toList()
 
@@ -400,7 +400,7 @@ class DynamoDbDocumentStoreTests {
             Document(
                 id = DocumentKey("${partitionKey}_$i", "0000"),
                 body = "{\"b\":\"value $i\"}",
-                version = 0
+                version = 0,
             )
         }
         store.updateDocuments(*documents.toTypedArray())
@@ -410,7 +410,7 @@ class DynamoDbDocumentStoreTests {
                 filterExpression = "b BETWEEN :start AND :end"
                 expressionAttributeValues = mapOf(
                     ":start" to AttributeValue.S("val"),
-                    ":end" to AttributeValue.S("value 4")
+                    ":end" to AttributeValue.S("value 4"),
                 )
             }.toList()
 
@@ -423,7 +423,7 @@ class DynamoDbDocumentStoreTests {
             Document(
                 id = DocumentKey("${partitionKey}_$i", "0000"),
                 body = "{\"b\":\"$STRING_100KB\"}",
-                version = 0
+                version = 0,
             )
         }
         documents.forEach { document -> store.updateDocuments(document) }
@@ -433,7 +433,7 @@ class DynamoDbDocumentStoreTests {
                 filterExpression = "partition_key BETWEEN :start AND :end"
                 expressionAttributeValues = mapOf(
                     ":start" to AttributeValue.S("${partitionKey}_120"),
-                    ":end" to AttributeValue.S("${partitionKey}_180")
+                    ":end" to AttributeValue.S("${partitionKey}_180"),
                 )
             }.toList()
 
@@ -449,7 +449,7 @@ class DynamoDbDocumentStoreTests {
         fun updateDocuments_oneArgument(): Stream<String?> {
             return Stream.of(
                 JSON_1,
-                null
+                null,
             )
         }
 
@@ -459,7 +459,7 @@ class DynamoDbDocumentStoreTests {
                 Arguments.of(JSON_1, JSON_2),
                 Arguments.of(null, JSON_2),
                 Arguments.of(JSON_1, null),
-                Arguments.of(null, null)
+                Arguments.of(null, null),
             )
         }
 
@@ -470,7 +470,7 @@ class DynamoDbDocumentStoreTests {
                 "\"text\"",
                 "true",
                 "false",
-                "null"
+                "null",
             )
 
             val firstLevel: List<String> = scalars.map {
@@ -505,7 +505,7 @@ class DynamoDbDocumentStoreTests {
     private suspend fun checkDocument(version: Long) =
         store.updateDocuments(
             updatedDocuments = emptyList(),
-            checkedDocuments = listOf(Document(ids[0], "{\"ignored\":\"ignored\"}", version))
+            checkedDocuments = listOf(Document(ids[0], "{\"ignored\":\"ignored\"}", version)),
         )
 
     private fun assertDocuments(actual: List<Document>, expected: List<Document>) {
@@ -542,7 +542,7 @@ class DynamoDbDocumentStoreTests {
             client = DynamoDbClient {
                 endpointUrl = Url.parse("http://localhost:$port")
                 credentialsProvider = StaticCredentialsProvider(
-                    Credentials(accessKeyId = "NONE", secretAccessKey = "NONE")
+                    Credentials(accessKeyId = "NONE", secretAccessKey = "NONE"),
                 )
                 region = "eu-west-1"
             }

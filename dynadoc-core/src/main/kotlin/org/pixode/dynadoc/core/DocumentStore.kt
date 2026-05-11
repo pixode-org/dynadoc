@@ -24,7 +24,7 @@ interface DocumentStore {
  * Represents an error that occurs when attempting to modify a document using the wrong base version.
  */
 class UpdateConflictException(
-    val id: DocumentKey
+    val id: DocumentKey,
 ): RuntimeException("The object $id has been modified.")
 
 

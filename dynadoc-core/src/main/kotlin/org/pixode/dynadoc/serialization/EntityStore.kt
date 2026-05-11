@@ -12,7 +12,7 @@ import kotlin.reflect.typeOf
  */
 class EntityStore(
     private val documentStore: DocumentStore,
-    private val jsonSerializer: JsonSerializer
+    private val jsonSerializer: JsonSerializer,
 ) {
     /**
      * Updates atomically the body of multiple documents represented as [JsonEntity] objects.
@@ -20,14 +20,14 @@ class EntityStore(
     @Throws(UpdateConflictException::class)
     suspend fun updateEntities(
         updatedDocuments: Iterable<JsonEntity<Any?>> = emptyList(),
-        checkedDocuments: Iterable<JsonEntity<Any?>> = emptyList()
+        checkedDocuments: Iterable<JsonEntity<Any?>> = emptyList(),
     ) {
         documentStore.updateDocuments(
             updatedDocuments = updatedDocuments
                 .map(jsonSerializer::toDocument),
             checkedDocuments = checkedDocuments
                 .map { entity -> entity.copy(entity = null) }
-                .map(jsonSerializer::toDocument)
+                .map(jsonSerializer::toDocument),
         )
     }
 

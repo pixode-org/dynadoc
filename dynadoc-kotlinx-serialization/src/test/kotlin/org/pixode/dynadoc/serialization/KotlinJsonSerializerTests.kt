@@ -46,7 +46,7 @@ class KotlinJsonSerializerTests {
         val document: JsonEntity<JsonStringValue> = JsonEntity(
             id = DocumentKey("PK", "SK"),
             entity = JsonStringValue("value"),
-            version = 1
+            version = 1,
         )
 
         val result: Document = DefaultJsonSerializer.toDocument(document)
@@ -59,7 +59,7 @@ class KotlinJsonSerializerTests {
         val document = Document(
             id = DocumentKey("PK", "SK"),
             body = """ { "key": "value" } """,
-            version = 1
+            version = 1,
         )
 
         val result: JsonEntity<JsonStringValue?> = DefaultJsonSerializer.fromDocument(document)
@@ -78,55 +78,55 @@ class KotlinJsonSerializerTests {
                 Arguments.of(
                     """ { "key": "value" } """,
                     typeOf<JsonStringValue>(),
-                    JsonStringValue("value")
+                    JsonStringValue("value"),
                 ),
                 Arguments.of(
                     """ { "key": 1234567890.12345 } """,
                     typeOf<JsonNumberValue>(),
-                    JsonNumberValue(1234567890.12345)
+                    JsonNumberValue(1234567890.12345),
                 ),
                 Arguments.of(
                     """ { "key": true } """,
                     typeOf<JsonBooleanValue>(),
-                    JsonBooleanValue(true)
+                    JsonBooleanValue(true),
                 ),
                 Arguments.of(
                     """ { "key": [10, 20, 30] } """,
                     typeOf<JsonList>(),
-                    JsonList(listOf(10, 20, 30))
+                    JsonList(listOf(10, 20, 30)),
                 ),
                 Arguments.of(
                     """ { "key": { "a": 1, "b": 2 } } """,
                     typeOf<JsonMap>(),
                     JsonMap(mapOf(
                         "a" to 1,
-                        "b" to 2
-                    ))
+                        "b" to 2,
+                    )),
                 ),
                 Arguments.of(
                     """ { "key": "value" } """,
                     typeOf<JsonStringNullable>(),
-                    JsonStringNullable("value")
+                    JsonStringNullable("value"),
                 ),
                 Arguments.of(
                     """ { "key": null } """,
                     typeOf<JsonStringNullable>(),
-                    JsonStringNullable(null)
+                    JsonStringNullable(null),
                 ),
                 Arguments.of(
                     """ { } """,
                     typeOf<JsonStringDefault>(),
-                    JsonStringDefault("default")
+                    JsonStringDefault("default"),
                 ),
                 Arguments.of(
                     """ { } """,
                     typeOf<JsonStringDefaultNullable>(),
-                    JsonStringDefaultNullable(null)
+                    JsonStringDefaultNullable(null),
                 ),
                 Arguments.of(
                     """ { "key": "value" } """,
                     typeOf<JsonStringDefault>(),
-                    JsonStringDefault("value")
+                    JsonStringDefault("value"),
                 ),
             )
         }
@@ -136,19 +136,19 @@ class KotlinJsonSerializerTests {
             return Stream.of(
                 Arguments.of(
                     """ { "key": null } """,
-                    typeOf<JsonStringValue>()
+                    typeOf<JsonStringValue>(),
                 ),
                 Arguments.of(
                     """ { } """,
-                    typeOf<JsonStringValue>()
+                    typeOf<JsonStringValue>(),
                 ),
                 Arguments.of(
                     """ { } """,
-                    typeOf<JsonStringNullable>()
+                    typeOf<JsonStringNullable>(),
                 ),
                 Arguments.of(
                     """ { "key": null } """,
-                    typeOf<JsonStringDefault>()
+                    typeOf<JsonStringDefault>(),
                 ),
             )
         }

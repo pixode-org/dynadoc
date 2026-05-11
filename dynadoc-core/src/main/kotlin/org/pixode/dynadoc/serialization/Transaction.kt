@@ -9,7 +9,7 @@ typealias RetryPolicy = suspend (throwable: Throwable, failureCount: Int) -> Boo
 
 suspend inline fun <T> EntityStore.transaction(
     noinline retryPolicy: RetryPolicy = NO_RETRY,
-    execute: BatchBuilder.() -> T
+    execute: BatchBuilder.() -> T,
 ): T {
     var failureCount: Int = 0
 

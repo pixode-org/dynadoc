@@ -13,7 +13,7 @@ data class JsonEntity<out T>(
     val entity: T,
 
     /** The current version of the document. **/
-    val version: Long
+    val version: Long,
 )
 
 

@@ -38,7 +38,7 @@ fun <T> assertEntity(document: JsonEntity<T>, id: DocumentKey, entity: T?, versi
 fun DocumentStore.assertUpdateDocuments(
     exactly: Int = 1,
     checked: List<Document> = emptyList(),
-    updated: List<Document> = emptyList()
+    updated: List<Document> = emptyList(),
 ) =
     coVerify(exactly = exactly) {
         this@assertUpdateDocuments.updateDocuments(

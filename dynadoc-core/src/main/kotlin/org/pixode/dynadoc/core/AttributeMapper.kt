@@ -18,7 +18,7 @@ val systemAttributes: Set<String> = setOf(PARTITION_KEY, SORT_KEY, VERSION, DELE
 
 class AttributeMapper(
     private val expiration: Duration,
-    private val clock: Clock
+    private val clock: Clock,
 ) {
     fun toDocument(attributes: Map<String, AttributeValue>): Document {
         val body: String? =
@@ -32,7 +32,7 @@ class AttributeMapper(
         return Document(
             id = toDocumentKey(attributes),
             body = body,
-            version = (attributes.getValue(VERSION) as AttributeValue.N).value.toLong()
+            version = (attributes.getValue(VERSION) as AttributeValue.N).value.toLong(),
         )
     }
 
@@ -67,12 +67,12 @@ class AttributeMapper(
 
     fun fromDocumentKey(id: DocumentKey) = mapOf(
         PARTITION_KEY to AttributeValue.S(id.partitionKey),
-        SORT_KEY to AttributeValue.S(id.sortKey)
+        SORT_KEY to AttributeValue.S(id.sortKey),
     )
 
     fun toDocumentKey(attributes: Map<String, AttributeValue>): DocumentKey = DocumentKey(
         partitionKey = (attributes.getValue(PARTITION_KEY) as AttributeValue.S).value,
-        sortKey = (attributes.getValue(SORT_KEY) as AttributeValue.S).value
+        sortKey = (attributes.getValue(SORT_KEY) as AttributeValue.S).value,
     )
 
     private fun jsonToAttributeValueMap(json: String): Map<String, AttributeValue> =

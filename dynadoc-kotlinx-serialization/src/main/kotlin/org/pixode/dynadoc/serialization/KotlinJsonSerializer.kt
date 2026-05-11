@@ -6,7 +6,7 @@ import kotlinx.serialization.serializer
 import kotlin.reflect.KType
 
 class KotlinJsonSerializer(
-    private val kotlinJson: Json
+    private val kotlinJson: Json,
 ) : JsonSerializer {
 
     override fun serialize(entity: Any): String =

@@ -18,7 +18,7 @@ class DynamoDbDocumentStore(
     private val client: DynamoDbClient,
     private val tableName: String,
     expiration: Duration = Duration.ofDays(30),
-    clock: Clock = Clock.systemUTC()
+    clock: Clock = Clock.systemUTC(),
 ) : DocumentStore {
 
     private val attributeMapper: AttributeMapper = AttributeMapper(expiration, clock)

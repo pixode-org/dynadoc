@@ -33,7 +33,7 @@ class TransactionTests {
         Assertions.assertEquals("result", result)
         documentStore.assertUpdateDocuments(
             checked = listOf(Document(ids[0], null, 1)),
-            updated = listOf(Document(ids[1], TestSerializer.jsonFor("abc"), 2))
+            updated = listOf(Document(ids[1], TestSerializer.jsonFor("abc"), 2)),
         )
     }
 
@@ -84,7 +84,7 @@ class TransactionTests {
 
         documentStore.assertUpdateDocuments(
             updated = listOf(Document(ids[1], TestSerializer.jsonFor("abc"), 2)),
-            checked = listOf(Document(ids[0], null, 1))
+            checked = listOf(Document(ids[0], null, 1)),
         )
     }
 
@@ -106,7 +106,7 @@ class TransactionTests {
         documentStore.assertUpdateDocuments(
             exactly = retries + 1,
             updated = listOf(Document(ids[1], TestSerializer.jsonFor("abc"), 2)),
-            checked = listOf(Document(ids[0], null, 1))
+            checked = listOf(Document(ids[0], null, 1)),
         )
     }
 
@@ -126,7 +126,7 @@ class TransactionTests {
 
         documentStore.assertUpdateDocuments(
             updated = listOf(Document(ids[1], TestSerializer.jsonFor("abc"), 2)),
-            checked = listOf(Document(ids[0], null, 1))
+            checked = listOf(Document(ids[0], null, 1)),
         )
     }
 

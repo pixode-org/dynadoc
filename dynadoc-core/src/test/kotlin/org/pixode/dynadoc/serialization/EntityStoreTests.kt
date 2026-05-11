@@ -32,7 +32,7 @@ class EntityStoreTests {
         store.updateEntities(document)
 
         documentStore.assertUpdateDocuments(
-            updated = listOf(Document(ids[0], jsonFor("abc"), 1))
+            updated = listOf(Document(ids[0], jsonFor("abc"), 1)),
         )
     }
 
@@ -43,7 +43,7 @@ class EntityStoreTests {
         store.updateEntities(document)
 
         documentStore.assertUpdateDocuments(
-            updated = listOf(Document(ids[0], null, 1))
+            updated = listOf(Document(ids[0], null, 1)),
         )
     }
 
@@ -54,7 +54,7 @@ class EntityStoreTests {
         store.updateEntities(checkedDocuments = listOf(document))
 
         documentStore.assertUpdateDocuments(
-            checked = listOf(Document(ids[0], null, 1))
+            checked = listOf(Document(ids[0], null, 1)),
         )
     }
 
@@ -63,7 +63,7 @@ class EntityStoreTests {
         store.updateEntities(
             updatedDocuments = listOf(
                 JsonEntity(ids[0], "abc", 1),
-                JsonEntity(ids[1], null, 2)
+                JsonEntity(ids[1], null, 2),
             ),
             checkedDocuments = listOf(
                 JsonEntity(ids[2], 5.5f, 3),
@@ -74,12 +74,12 @@ class EntityStoreTests {
         documentStore.assertUpdateDocuments(
             updated = listOf(
                 Document(ids[0], jsonFor("abc"), 1),
-                Document(ids[1], null, 2)
+                Document(ids[1], null, 2),
             ),
             checked = listOf(
                 Document(ids[2], null, 3),
-                Document(ids[3], null, 4)
-            )
+                Document(ids[3], null, 4),
+            ),
         )
     }
 

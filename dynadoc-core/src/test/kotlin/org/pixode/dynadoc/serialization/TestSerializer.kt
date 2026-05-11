@@ -54,7 +54,7 @@ object TestSerializer : JsonSerializer {
                             "INT" -> jsonFor(key.partitionKey.toInt())
                             else -> null
                         },
-                        version = index + 1L
+                        version = index + 1L,
                     )
                 }
                 .asFlow()

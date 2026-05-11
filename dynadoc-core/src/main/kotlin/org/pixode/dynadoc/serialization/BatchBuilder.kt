@@ -4,7 +4,7 @@ import org.pixode.dynadoc.core.DocumentKey
 import org.pixode.dynadoc.core.UpdateConflictException
 
 class BatchBuilder(
-    private val store: EntityStore
+    private val store: EntityStore,
 ) {
     private val checkedDocuments = mutableMapOf<DocumentKey, JsonEntity<Any?>>()
     private val modifiedDocuments = mutableMapOf<DocumentKey, JsonEntity<Any?>>()

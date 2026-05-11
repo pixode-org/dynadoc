@@ -27,7 +27,7 @@ class MoshiSerializerTests {
         val document: JsonEntity<TestClass> = JsonEntity(
             id = DocumentKey("PK", "SK"),
             entity = testObject,
-            version = 1
+            version = 1,
         )
 
         val result: Document = DefaultJsonSerializer.toDocument(document)
@@ -40,7 +40,7 @@ class MoshiSerializerTests {
         val document = Document(
             id = DocumentKey("PK", "SK"),
             body = testJson,
-            version = 1
+            version = 1,
         )
 
         val result: JsonEntity<TestClass?> = DefaultJsonSerializer.fromDocument(document)
@@ -60,7 +60,7 @@ private data class TestClass(
     val nullNumberKey: Int?,
     val nullBooleanKey: Boolean?,
     val nullListKey: List<Long>?,
-    val nullMapKey: Map<String, Long>?
+    val nullMapKey: Map<String, Long>?,
 )
 
 private val testObject = TestClass(
@@ -70,13 +70,13 @@ private val testObject = TestClass(
     listKey = listOf(10, 20, 30),
     mapKey = mapOf(
         "a" to 1,
-        "b" to 2
+        "b" to 2,
     ),
     nullStringKey = null,
     nullNumberKey = null,
     nullBooleanKey = null,
     nullListKey = null,
-    nullMapKey = null
+    nullMapKey = null,
 )
 
 private val testJson = """

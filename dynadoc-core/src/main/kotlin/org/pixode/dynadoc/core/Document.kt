@@ -11,7 +11,7 @@ data class Document(
     val body: String?,
 
     /** The current version of the document. **/
-    val version: Long
+    val version: Long,
 )
 
 /**
@@ -19,7 +19,7 @@ data class Document(
  */
 data class DocumentKey(
     val partitionKey: String,
-    val sortKey: String
+    val sortKey: String,
 ) {
     override fun toString() = "(\"$partitionKey\", \"$sortKey\")"
 }

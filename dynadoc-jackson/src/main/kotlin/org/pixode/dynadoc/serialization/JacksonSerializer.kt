@@ -7,7 +7,7 @@ import kotlin.reflect.KType
 import kotlin.reflect.jvm.jvmErasure
 
 class JacksonSerializer(
-    private val objectMapper: ObjectMapper
+    private val objectMapper: ObjectMapper,
 ) : JsonSerializer {
 
     override fun serialize(entity: Any): String =

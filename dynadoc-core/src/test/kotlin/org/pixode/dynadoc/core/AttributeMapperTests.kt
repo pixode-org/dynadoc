@@ -19,7 +19,7 @@ class AttributeMapperTests {
     private val now = Instant.parse("2024-01-01T20:00:00Z")
     private val attributeMapper: AttributeMapper = AttributeMapper(
         Duration.ofSeconds(150),
-        Clock.fixed(now, ZoneId.of("UTC"))
+        Clock.fixed(now, ZoneId.of("UTC")),
     )
 
     //region fromDocument
@@ -67,7 +67,7 @@ class AttributeMapperTests {
         "[\"a\"]",
         " } { ",
         "a",
-        "{"
+        "{",
     ])
     fun fromDocument_invalidJsonObject(json: String) {
         val exception = assertThrows<IllegalArgumentException> {
@@ -82,7 +82,7 @@ class AttributeMapperTests {
         PARTITION_KEY,
         SORT_KEY,
         VERSION,
-        DELETED
+        DELETED,
     ])
     fun fromDocument_invalidAttributes(attribute: String) {
         val exception = assertThrows<IllegalArgumentException> {
@@ -107,7 +107,7 @@ class AttributeMapperTests {
         "{ \"key\": [ 2, 3 ] }",
         "{ \"key\": [ 2, \"abc\", { \"sub\": 2 } ] }",
         "{ \"key\": { \"sub\": 2, \"arr\": [ 2, \"abc\" ] } }",
-        "{ }"
+        "{ }",
     ])
     fun toDocument_validJson(json: String) {
         val attributes: Map<String, AttributeValue> = fromDocument(json)
@@ -130,7 +130,7 @@ class AttributeMapperTests {
     @ValueSource(strings = [
         PARTITION_KEY,
         SORT_KEY,
-        VERSION
+        VERSION,
     ])
     fun toDocument_missingAttribute(attribute: String) {
         val attributes: Map<String, AttributeValue> = fromDocument("{ \"key\": \"abc\" }") - attribute

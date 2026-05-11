@@ -29,7 +29,7 @@ class BatchBuilderTests {
 
         documentStore.assertUpdateDocuments(
             updated = listOf(Document(ids[1], jsonFor("abc"), 2)),
-            checked = listOf(Document(ids[0], null, 0))
+            checked = listOf(Document(ids[0], null, 0)),
         )
     }
 
@@ -45,7 +45,7 @@ class BatchBuilderTests {
         batchBuilder.submit()
 
         documentStore.assertUpdateDocuments(
-            checked = listOf(Document(ids[0], null, 0))
+            checked = listOf(Document(ids[0], null, 0)),
         )
     }
 
@@ -67,7 +67,7 @@ class BatchBuilderTests {
         batchBuilder.submit()
 
         documentStore.assertUpdateDocuments(
-            updated = listOf(Document(ids[0], jsonFor("abc"), 0))
+            updated = listOf(Document(ids[0], jsonFor("abc"), 0)),
         )
     }
 
@@ -88,14 +88,14 @@ class BatchBuilderTests {
         assertThrows<IllegalStateException> {
             batchBuilder.check(
                 JsonEntity(ids[1], "def", 10),
-                JsonEntity(ids[0], "def", 11)
+                JsonEntity(ids[0], "def", 11),
             )
         }
 
         batchBuilder.submit()
 
         documentStore.assertUpdateDocuments(
-            updated = listOf(Document(ids[0], jsonFor("abc"), 0))
+            updated = listOf(Document(ids[0], jsonFor("abc"), 0)),
         )
     }
 
@@ -111,7 +111,7 @@ class BatchBuilderTests {
         batchBuilder.submit()
 
         documentStore.assertUpdateDocuments(
-            updated = listOf(Document(ids[0], jsonFor("abc"), 0))
+            updated = listOf(Document(ids[0], jsonFor("abc"), 0)),
         )
     }
 
@@ -142,14 +142,14 @@ class BatchBuilderTests {
         assertThrows<IllegalStateException> {
             batchBuilder.modify(
                 JsonEntity(ids[1], "def", 10),
-                JsonEntity(ids[0], "def", 11)
+                JsonEntity(ids[0], "def", 11),
             )
         }
 
         batchBuilder.submit()
 
         documentStore.assertUpdateDocuments(
-            updated = listOf(Document(ids[0], jsonFor("abc"), 0))
+            updated = listOf(Document(ids[0], jsonFor("abc"), 0)),
         )
     }
 
@@ -162,7 +162,7 @@ class BatchBuilderTests {
         batchBuilder.submit()
 
         documentStore.assertUpdateDocuments(
-            updated = listOf(Document(ids[0], jsonFor("abcdef"), 1))
+            updated = listOf(Document(ids[0], jsonFor("abcdef"), 1)),
         )
     }
 
@@ -175,7 +175,7 @@ class BatchBuilderTests {
         batchBuilder.submit()
 
         documentStore.assertUpdateDocuments(
-            updated = listOf(Document(ids[0], null, 1))
+            updated = listOf(Document(ids[0], null, 1)),
         )
     }
 
