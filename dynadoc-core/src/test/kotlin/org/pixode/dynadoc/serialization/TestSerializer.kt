@@ -2,14 +2,14 @@
 
 import io.mockk.coEvery
 import io.mockk.mockk
+import kotlin.reflect.KType
+import kotlin.reflect.typeOf
 import kotlinx.coroutines.flow.asFlow
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.opentest4j.AssertionFailedError
 import org.pixode.dynadoc.core.Document
 import org.pixode.dynadoc.core.DocumentKey
 import org.pixode.dynadoc.core.DocumentStore
-import kotlin.reflect.KType
-import kotlin.reflect.typeOf
 
 object TestSerializer : JsonSerializer {
     private val regex = Regex("\\{\"(?<key>(string|int))\":\"(?<value>[^\"]*)\"}")
@@ -34,10 +34,12 @@ object TestSerializer : JsonSerializer {
                 assertEquals(key.value, "string")
                 value.value as T
             }
+
             typeOf<Int>() -> {
                 assertEquals(key.value, "int")
                 value.value.toInt() as T
             }
+
             else -> throw AssertionFailedError("Invalid type: $type")
         }
     }

@@ -1,13 +1,15 @@
 ﻿package org.pixode.dynadoc;
 
 import io.mockk.coVerify
+import kotlin.test.assertContentEquals
+import org.junit.jupiter.api.Assertions.assertEquals
+import org.junit.jupiter.api.Assertions.assertNotNull
+import org.junit.jupiter.api.Assertions.assertNull
 import org.pixode.dynadoc.core.Document
 import org.pixode.dynadoc.core.DocumentKey
 import org.pixode.dynadoc.core.DocumentStore
 import org.pixode.dynadoc.serialization.JsonEntity
-import org.junit.jupiter.api.Assertions.*
 import org.skyscreamer.jsonassert.JSONAssert
-import kotlin.test.assertContentEquals
 
 fun assertDocument(document: Document, id: DocumentKey, body: String?, version: Long) {
     assertEquals(id, document.id)
@@ -47,6 +49,6 @@ fun DocumentStore.assertUpdateDocuments(
             },
             checkedDocuments = coWithArg {
                 assertContentEquals(checked.toList(), it.toList())
-            }
+            },
         )
     }

@@ -1,11 +1,11 @@
 ﻿package org.pixode.dynadoc.serialization
 
+import kotlin.reflect.KType
+import kotlin.reflect.typeOf
 import kotlinx.coroutines.flow.toList
 import org.pixode.dynadoc.core.DocumentKey
 import org.pixode.dynadoc.core.DocumentStore
 import org.pixode.dynadoc.core.UpdateConflictException
-import kotlin.reflect.KType
-import kotlin.reflect.typeOf
 
 /**
  * Represents a service object used to retrieve and modify documents represented as [JsonEntity] objects.

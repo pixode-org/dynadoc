@@ -3,13 +3,29 @@
 import aws.sdk.kotlin.services.dynamodb.DynamoDbClient
 import aws.sdk.kotlin.services.dynamodb.batchGetItem
 import aws.sdk.kotlin.services.dynamodb.createTable
-import aws.sdk.kotlin.services.dynamodb.model.*
+import aws.sdk.kotlin.services.dynamodb.model.AttributeDefinition
+import aws.sdk.kotlin.services.dynamodb.model.AttributeValue
+import aws.sdk.kotlin.services.dynamodb.model.BillingMode
+import aws.sdk.kotlin.services.dynamodb.model.ConditionCheck
+import aws.sdk.kotlin.services.dynamodb.model.CreateTableRequest
+import aws.sdk.kotlin.services.dynamodb.model.KeySchemaElement
+import aws.sdk.kotlin.services.dynamodb.model.KeyType
+import aws.sdk.kotlin.services.dynamodb.model.KeysAndAttributes
+import aws.sdk.kotlin.services.dynamodb.model.Put
+import aws.sdk.kotlin.services.dynamodb.model.QueryRequest
+import aws.sdk.kotlin.services.dynamodb.model.ScalarAttributeType
+import aws.sdk.kotlin.services.dynamodb.model.ScanRequest
+import aws.sdk.kotlin.services.dynamodb.model.TransactWriteItem
+import aws.sdk.kotlin.services.dynamodb.model.TransactionCanceledException
 import aws.sdk.kotlin.services.dynamodb.query
 import aws.sdk.kotlin.services.dynamodb.scan
 import aws.sdk.kotlin.services.dynamodb.transactWriteItems
-import kotlinx.coroutines.flow.*
 import java.time.Clock
 import java.time.Duration
+import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.asFlow
+import kotlinx.coroutines.flow.flow
+import kotlinx.coroutines.flow.flowOf
 
 /**
  * Represents an implementation of the [DocumentStore] interface that relies on DynamoDB for persistence.
@@ -100,7 +116,7 @@ class DynamoDbDocumentStore(
                     tableName to KeysAndAttributes {
                         keys = idList.distinct().map(attributeMapper::fromDocumentKey)
                         consistentRead = true
-                    }
+                    },
                 )
             }
 
@@ -169,7 +185,7 @@ class DynamoDbDocumentStore(
                 KeySchemaElement {
                     attributeName = SORT_KEY
                     keyType = KeyType.Range
-                }
+                },
             )
             attributeDefinitions = listOf(
                 AttributeDefinition {
@@ -179,7 +195,7 @@ class DynamoDbDocumentStore(
                 AttributeDefinition {
                     attributeName = SORT_KEY
                     attributeType = ScalarAttributeType.S
-                }
+                },
             )
             billingMode = BillingMode.PayPerRequest
             configure()

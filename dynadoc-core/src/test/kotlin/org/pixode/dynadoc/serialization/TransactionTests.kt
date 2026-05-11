@@ -4,15 +4,15 @@ import io.mockk.coEvery
 import io.mockk.coVerify
 import io.mockk.mockk
 import kotlinx.coroutines.runBlocking
-import org.pixode.dynadoc.assertUpdateDocuments
-import org.pixode.dynadoc.core.Document
-import org.pixode.dynadoc.core.DocumentStore
-import org.pixode.dynadoc.core.UpdateConflictException
 import org.junit.jupiter.api.Assertions
 import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.assertThrows
 import org.junit.jupiter.params.ParameterizedTest
 import org.junit.jupiter.params.provider.ValueSource
+import org.pixode.dynadoc.assertUpdateDocuments
+import org.pixode.dynadoc.core.Document
+import org.pixode.dynadoc.core.DocumentStore
+import org.pixode.dynadoc.core.UpdateConflictException
 
 class TransactionTests {
     private val documentStore: DocumentStore = mockk {
@@ -61,7 +61,8 @@ class TransactionTests {
                     modify(JsonEntity(ids[1], "abc", 2))
                     throw ArithmeticException()
                 }
-            })
+            },
+        )
 
         coVerify(exactly = 0) {
             documentStore.updateDocuments(any(), any())
@@ -80,7 +81,8 @@ class TransactionTests {
                     check(JsonEntity(ids[0], "abc", 1))
                     modify(JsonEntity(ids[1], "abc", 2))
                 }
-            })
+            },
+        )
 
         documentStore.assertUpdateDocuments(
             updated = listOf(Document(ids[1], TestSerializer.jsonFor("abc"), 2)),
@@ -101,7 +103,8 @@ class TransactionTests {
                     check(JsonEntity(ids[0], "abc", 1))
                     modify(JsonEntity(ids[1], "abc", 2))
                 }
-            })
+            },
+        )
 
         documentStore.assertUpdateDocuments(
             exactly = retries + 1,
@@ -122,7 +125,8 @@ class TransactionTests {
                     check(JsonEntity(ids[0], "abc", 1))
                     modify(JsonEntity(ids[1], "abc", 2))
                 }
-            })
+            },
+        )
 
         documentStore.assertUpdateDocuments(
             updated = listOf(Document(ids[1], TestSerializer.jsonFor("abc"), 2)),

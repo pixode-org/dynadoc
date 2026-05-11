@@ -1,12 +1,12 @@
 ﻿package org.pixode.dynadoc.serialization
 
 import kotlinx.coroutines.runBlocking
-import org.pixode.dynadoc.assertEntity
-import org.pixode.dynadoc.core.DocumentKey
-import org.pixode.dynadoc.core.DocumentStore
 import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.assertNotNull
 import org.junit.jupiter.api.assertNull
+import org.pixode.dynadoc.assertEntity
+import org.pixode.dynadoc.core.DocumentKey
+import org.pixode.dynadoc.core.DocumentStore
 
 class EntityKeyTests {
     private val documentStore: DocumentStore = TestSerializer.createMockDocumentStore()

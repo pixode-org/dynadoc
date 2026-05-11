@@ -1,9 +1,10 @@
 ﻿package org.pixode.dynadoc.serialization
 
+import org.junit.jupiter.api.Assertions.assertNotNull
+import org.junit.jupiter.api.Assertions.assertNull
+import org.junit.jupiter.api.Test
 import org.pixode.dynadoc.assertEntity
 import org.pixode.dynadoc.core.DocumentKey
-import org.junit.jupiter.api.Assertions.*
-import org.junit.jupiter.api.Test
 
 private val id: DocumentKey = DocumentKey("PK", "SK")
 

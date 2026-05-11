@@ -19,7 +19,7 @@ It also adds a few special attributes that don't appear in the JSON, but appear 
 
 ### The `JsonEntity<T>` type
 
-In the application code, documents are represented using the `IJsonEntity<T>` type:
+In the application code, documents are represented using the `JsonEntity<T>` type:
 
 ```kotlin
 data class JsonEntity<out T>(
@@ -31,7 +31,7 @@ data class JsonEntity<out T>(
     val entity: T,
 
     /** The current version of the document. **/
-    val version: Long
+    val version: Long,
 )
 ```
 
@@ -42,7 +42,7 @@ The `Entity` property can be null if the document does not exist. This can be th
 ```kotlin
 data class DocumentKey(
     val partitionKey: String,
-    val sortKey: String
+    val sortKey: String,
 )
 ```
 

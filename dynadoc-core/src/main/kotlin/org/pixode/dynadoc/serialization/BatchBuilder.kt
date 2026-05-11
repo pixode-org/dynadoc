@@ -38,8 +38,7 @@ class BatchBuilder(
     fun check(vararg documents: JsonEntity<Any?>) {
         val addCheckedDocuments = mutableListOf<JsonEntity<Any?>>()
 
-        for (document in documents)
-        {
+        for (document in documents) {
             val existingCheckedDocument = checkedDocuments[document.id]
             val existingModifiedDocument = modifiedDocuments[document.id]
 

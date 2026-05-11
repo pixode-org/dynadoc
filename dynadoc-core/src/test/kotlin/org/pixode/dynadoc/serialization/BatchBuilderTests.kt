@@ -3,14 +3,14 @@
 import io.mockk.coEvery
 import io.mockk.mockk
 import kotlinx.coroutines.runBlocking
+import org.junit.jupiter.api.Assertions.assertEquals
+import org.junit.jupiter.api.Test
+import org.junit.jupiter.api.assertThrows
 import org.pixode.dynadoc.assertUpdateDocuments
 import org.pixode.dynadoc.core.Document
 import org.pixode.dynadoc.core.DocumentKey
 import org.pixode.dynadoc.core.DocumentStore
 import org.pixode.dynadoc.serialization.TestSerializer.jsonFor
-import org.junit.jupiter.api.Assertions.assertEquals
-import org.junit.jupiter.api.Test
-import org.junit.jupiter.api.assertThrows
 
 class BatchBuilderTests {
     private val documentStore: DocumentStore = mockk {

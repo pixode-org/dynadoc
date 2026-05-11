@@ -1,8 +1,8 @@
 ﻿package org.pixode.dynadoc.serialization
 
-import org.pixode.dynadoc.core.Document
 import kotlin.reflect.KType
 import kotlin.reflect.typeOf
+import org.pixode.dynadoc.core.Document
 
 interface JsonSerializer {
     /**

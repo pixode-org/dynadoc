@@ -2,7 +2,6 @@
 
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.first
-import java.util.*
 
 /**
  * Represents a service object used to retrieve and modify documents.
@@ -25,7 +24,7 @@ interface DocumentStore {
  */
 class UpdateConflictException(
     val id: DocumentKey,
-): RuntimeException("The object $id has been modified.")
+) : RuntimeException("The object $id has been modified.")
 
 
 @Throws(UpdateConflictException::class)

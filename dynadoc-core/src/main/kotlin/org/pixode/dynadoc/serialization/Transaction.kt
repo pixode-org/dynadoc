@@ -1,8 +1,8 @@
 ﻿package org.pixode.dynadoc.serialization
 
+import java.time.Duration
 import kotlinx.coroutines.time.delay
 import org.pixode.dynadoc.core.UpdateConflictException
-import java.time.Duration
 
 typealias RetryPolicy = suspend (throwable: Throwable, failureCount: Int) -> Boolean
 

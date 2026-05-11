@@ -1,19 +1,16 @@
 ﻿package org.pixode.dynadoc.serialization
 
-import io.mockk.coEvery
-import io.mockk.mockk
-import kotlinx.coroutines.flow.asFlow
+import java.math.BigDecimal
+import kotlin.reflect.typeOf
 import kotlinx.coroutines.runBlocking
+import org.junit.jupiter.api.Assertions.assertEquals
+import org.junit.jupiter.api.Test
 import org.pixode.dynadoc.assertEntity
 import org.pixode.dynadoc.assertUpdateDocuments
 import org.pixode.dynadoc.core.Document
 import org.pixode.dynadoc.core.DocumentKey
 import org.pixode.dynadoc.core.DocumentStore
 import org.pixode.dynadoc.serialization.TestSerializer.jsonFor
-import org.junit.jupiter.api.Assertions.assertEquals
-import org.junit.jupiter.api.Test
-import java.math.BigDecimal
-import kotlin.reflect.typeOf
 
 val ids = (0..9).map { i -> DocumentKey("document_$i", "STRING") }
 val idsInt = (0..9).map { i -> DocumentKey(i.toString(), "INT") }
@@ -67,8 +64,8 @@ class EntityStoreTests {
             ),
             checkedDocuments = listOf(
                 JsonEntity(ids[2], 5.5f, 3),
-                JsonEntity(ids[3], BigDecimal("21"), 4)
-            )
+                JsonEntity(ids[3], BigDecimal("21"), 4),
+            ),
         )
 
         documentStore.assertUpdateDocuments(
@@ -105,7 +102,7 @@ class EntityStoreTests {
                 idsNull[1] to typeOf<String>(),
                 idsInt[2] to typeOf<Int>(),
                 idsNull[3] to typeOf<Int>(),
-            )
+            ),
         )
 
         println(result)

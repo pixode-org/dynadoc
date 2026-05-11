@@ -1,11 +1,8 @@
 ﻿package org.pixode.dynadoc.serialization
 
-import com.squareup.moshi.JsonAdapter
 import com.squareup.moshi.Moshi
 import com.squareup.moshi.kotlin.reflect.KotlinJsonAdapterFactory
 import kotlin.reflect.KType
-import kotlin.reflect.javaType
-import kotlin.reflect.jvm.javaType
 import kotlin.reflect.jvm.jvmErasure
 
 class MoshiSerializer(
