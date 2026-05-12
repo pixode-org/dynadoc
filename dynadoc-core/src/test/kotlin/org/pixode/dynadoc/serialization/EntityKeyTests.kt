@@ -1,6 +1,7 @@
 ﻿package org.pixode.dynadoc.serialization
 
 import kotlinx.coroutines.runBlocking
+import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.assertNotNull
 import org.junit.jupiter.api.assertNull
@@ -70,6 +71,25 @@ class EntityKeyTests {
         assertNull(result1)
         assertNull(result2)
         assertNull(result3)
+    }
+
+    @Test
+    fun getEntities_list() = runBlocking {
+        val result = store.getEntities(
+            StringEntityKey(1),
+            StringEntityKey(2, isNull = true),
+            StringEntityKey(3),
+            StringEntityKey(4)
+        )
+
+        assertEquals(4, result.size)
+        assertNotNull(result[0])
+        assertEntity(result[0]!!, ids[1], "document_1", 1)
+        assertNull(result[1])
+        assertNotNull(result[2])
+        assertEntity(result[2]!!, ids[3], "document_3", 3)
+        assertNotNull(result[3])
+        assertEntity(result[3]!!, ids[4], "document_4", 4)
     }
 
     //endregion
