@@ -19,8 +19,10 @@ class JacksonSerializer(
 }
 
 
-val DefaultJsonSerializer = JacksonSerializer(objectMapper =
-    jacksonObjectMapper {
-        this.configure(KotlinFeature.StrictNullChecks, true)
-        this.configure(KotlinFeature.NullIsSameAsDefault, true)
-    })
+val DefaultJsonSerializer = JacksonSerializer(
+    objectMapper =
+        jacksonObjectMapper {
+            this.configure(KotlinFeature.StrictNullChecks, true)
+            this.configure(KotlinFeature.NullIsSameAsDefault, true)
+        },
+)

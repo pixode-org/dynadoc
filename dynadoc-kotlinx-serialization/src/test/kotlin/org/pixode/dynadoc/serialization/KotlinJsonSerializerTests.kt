@@ -1,20 +1,20 @@
 ﻿package org.pixode.dynadoc.serialization
 
+import java.util.stream.Stream
+import kotlin.reflect.KType
+import kotlin.reflect.typeOf
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.SerializationException
-import org.pixode.dynadoc.core.Document
-import org.pixode.dynadoc.core.DocumentKey
-import org.pixode.dynadoc.serialization.KotlinJsonSerializerTests.MethodSources.PREFIX
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.assertThrows
 import org.junit.jupiter.params.ParameterizedTest
 import org.junit.jupiter.params.provider.Arguments
 import org.junit.jupiter.params.provider.MethodSource
+import org.pixode.dynadoc.core.Document
+import org.pixode.dynadoc.core.DocumentKey
+import org.pixode.dynadoc.serialization.KotlinJsonSerializerTests.MethodSources.PREFIX
 import org.skyscreamer.jsonassert.JSONAssert
-import java.util.stream.Stream
-import kotlin.reflect.KType
-import kotlin.reflect.typeOf
 
 class KotlinJsonSerializerTests {
     @ParameterizedTest
@@ -66,7 +66,8 @@ class KotlinJsonSerializerTests {
 
         assertEquals(
             JsonStringValue("value"),
-            result.entity)
+            result.entity,
+        )
     }
 
     object MethodSources {
@@ -98,10 +99,12 @@ class KotlinJsonSerializerTests {
                 Arguments.of(
                     """ { "key": { "a": 1, "b": 2 } } """,
                     typeOf<JsonMap>(),
-                    JsonMap(mapOf(
-                        "a" to 1,
-                        "b" to 2,
-                    )),
+                    JsonMap(
+                        mapOf(
+                            "a" to 1,
+                            "b" to 2,
+                        ),
+                    ),
                 ),
                 Arguments.of(
                     """ { "key": "value" } """,

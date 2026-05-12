@@ -2,9 +2,10 @@
 
 import com.fasterxml.jackson.annotation.JsonAnyGetter
 import com.fasterxml.jackson.annotation.JsonAnySetter
-import org.pixode.dynadoc.core.Document
-import org.pixode.dynadoc.core.DocumentKey
-import org.pixode.dynadoc.serialization.JacksonSerializerTests.MethodSources.PREFIX
+import java.io.IOException
+import java.util.stream.Stream
+import kotlin.reflect.KType
+import kotlin.reflect.typeOf
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.assertThrows
@@ -12,11 +13,10 @@ import org.junit.jupiter.params.ParameterizedTest
 import org.junit.jupiter.params.provider.Arguments
 import org.junit.jupiter.params.provider.MethodSource
 import org.junit.jupiter.params.provider.ValueSource
+import org.pixode.dynadoc.core.Document
+import org.pixode.dynadoc.core.DocumentKey
+import org.pixode.dynadoc.serialization.JacksonSerializerTests.MethodSources.PREFIX
 import org.skyscreamer.jsonassert.JSONAssert
-import java.io.IOException
-import java.util.stream.Stream
-import kotlin.reflect.KType
-import kotlin.reflect.typeOf
 
 class JacksonSerializerTests {
     @ParameterizedTest
@@ -46,10 +46,12 @@ class JacksonSerializerTests {
     }
 
     @ParameterizedTest
-    @ValueSource(strings = [
-        """ { } """,
-        """ { "key": null } """,
-    ])
+    @ValueSource(
+        strings = [
+            """ { } """,
+            """ { "key": null } """,
+        ],
+    )
     fun deserialize_null(json: String) {
         val result: JsonStringNullable = DefaultJsonSerializer.deserialize(json, typeOf<JsonStringNullable>())
 
@@ -57,10 +59,12 @@ class JacksonSerializerTests {
     }
 
     @ParameterizedTest
-    @ValueSource(strings = [
-        """ { } """,
-        """ { "key": null } """,
-    ])
+    @ValueSource(
+        strings = [
+            """ { } """,
+            """ { "key": null } """,
+        ],
+    )
     fun deserialize_default(json: String) {
         val result: JsonStringDefault = DefaultJsonSerializer.deserialize(json, typeOf<JsonStringDefault>())
 
@@ -100,7 +104,8 @@ class JacksonSerializerTests {
 
         assertEquals(
             JsonStringValue("value"),
-            result.entity)
+            result.entity,
+        )
     }
 
     object MethodSources {
@@ -137,10 +142,12 @@ class JacksonSerializerTests {
                 Arguments.of(
                     """ { "key": { "a": 1, "b": 2 } } """,
                     typeOf<JsonMap>(),
-                    JsonMap(mapOf(
-                        "a" to 1,
-                        "b" to 2,
-                    )),
+                    JsonMap(
+                        mapOf(
+                            "a" to 1,
+                            "b" to 2,
+                        ),
+                    ),
                 ),
                 Arguments.of(
                     """ { "key": { } } """,
@@ -197,7 +204,7 @@ private data class JsonStringDefault(val key: String = "default")
 
 private data class JsonUnknownFields(
     val key: String,
-    @get: JsonAnyGetter
-    @param: JsonAnySetter
+    @get:JsonAnyGetter
+    @param:JsonAnySetter
     val unknownFields: Map<String, Any> = hashMapOf(),
 )

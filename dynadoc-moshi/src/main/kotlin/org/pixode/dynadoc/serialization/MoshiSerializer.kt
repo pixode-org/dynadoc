@@ -19,6 +19,8 @@ class MoshiSerializer(
 }
 
 
-val DefaultJsonSerializer = MoshiSerializer(Moshi.Builder()
-    .addLast(KotlinJsonAdapterFactory())
-    .build())
+val DefaultJsonSerializer = MoshiSerializer(
+    Moshi.Builder()
+        .addLast(KotlinJsonAdapterFactory())
+        .build(),
+)

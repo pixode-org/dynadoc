@@ -1,11 +1,11 @@
 ﻿package org.pixode.dynadoc.serialization
 
-import org.pixode.dynadoc.core.Document
-import org.pixode.dynadoc.core.DocumentKey
+import kotlin.reflect.typeOf
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Test
+import org.pixode.dynadoc.core.Document
+import org.pixode.dynadoc.core.DocumentKey
 import org.skyscreamer.jsonassert.JSONAssert
-import kotlin.reflect.typeOf
 
 class MoshiSerializerTests {
     @Test

@@ -1,17 +1,17 @@
 ﻿package org.pixode.dynadoc.core
 
 import aws.sdk.kotlin.services.dynamodb.model.AttributeValue
-import org.pixode.dynadoc.assertDocument
+import java.time.Clock
+import java.time.Duration
+import java.time.Instant
+import java.time.ZoneId
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.assertThrows
 import org.junit.jupiter.params.ParameterizedTest
 import org.junit.jupiter.params.provider.CsvSource
 import org.junit.jupiter.params.provider.ValueSource
-import java.time.Clock
-import java.time.Duration
-import java.time.Instant
-import java.time.ZoneId
+import org.pixode.dynadoc.assertDocument
 
 private val id: DocumentKey = DocumentKey("PK", "SK")
 
@@ -35,7 +35,8 @@ class AttributeMapperTests {
             "{ \"key\": [ 2, 3 ] }       | L",
             "{ \"key\": { \"sub\": 2 } } | M",
         ],
-        delimiter = '|')
+        delimiter = '|',
+    )
     fun fromDocument_validJson(json: String, expectedType: String) {
         val attributes: Map<String, AttributeValue> = fromDocument(json)
 
@@ -54,21 +55,26 @@ class AttributeMapperTests {
         assertEquals("PK", (attributes[PARTITION_KEY] as? AttributeValue.S)?.value)
         assertEquals("SK", (attributes[SORT_KEY] as? AttributeValue.S)?.value)
         assertEquals(2L, (attributes[VERSION] as? AttributeValue.N)?.value?.toLong())
-        assertEquals(Instant.parse("2024-01-01T20:02:30Z").epochSecond, (attributes[DELETED] as? AttributeValue.N)?.value?.toLong())
+        assertEquals(
+            Instant.parse("2024-01-01T20:02:30Z").epochSecond,
+            (attributes[DELETED] as? AttributeValue.N)?.value?.toLong(),
+        )
     }
 
     @ParameterizedTest
-    @ValueSource(strings = [
-        "\"a\"",
-        "10",
-        "true",
-        "false",
-        "null",
-        "[\"a\"]",
-        " } { ",
-        "a",
-        "{",
-    ])
+    @ValueSource(
+        strings = [
+            "\"a\"",
+            "10",
+            "true",
+            "false",
+            "null",
+            "[\"a\"]",
+            " } { ",
+            "a",
+            "{",
+        ],
+    )
     fun fromDocument_invalidJsonObject(json: String) {
         val exception = assertThrows<IllegalArgumentException> {
             fromDocument(json)
@@ -78,12 +84,14 @@ class AttributeMapperTests {
     }
 
     @ParameterizedTest
-    @ValueSource(strings = [
-        PARTITION_KEY,
-        SORT_KEY,
-        VERSION,
-        DELETED,
-    ])
+    @ValueSource(
+        strings = [
+            PARTITION_KEY,
+            SORT_KEY,
+            VERSION,
+            DELETED,
+        ],
+    )
     fun fromDocument_invalidAttributes(attribute: String) {
         val exception = assertThrows<IllegalArgumentException> {
             fromDocument("{\"a\":1,\"$attribute\":2}")
@@ -97,18 +105,20 @@ class AttributeMapperTests {
     //region toDocument
 
     @ParameterizedTest
-    @ValueSource(strings = [
-        "{ \"key\": \"abc\" }",
-        " \t \n \r { \"key\": \"abc\" } ",
-        "{ \"key\": 999 }",
-        "{ \"key\": true }",
-        "{ \"key\": false }",
-        "{ \"key\": null }",
-        "{ \"key\": [ 2, 3 ] }",
-        "{ \"key\": [ 2, \"abc\", { \"sub\": 2 } ] }",
-        "{ \"key\": { \"sub\": 2, \"arr\": [ 2, \"abc\" ] } }",
-        "{ }",
-    ])
+    @ValueSource(
+        strings = [
+            "{ \"key\": \"abc\" }",
+            " \t \n \r { \"key\": \"abc\" } ",
+            "{ \"key\": 999 }",
+            "{ \"key\": true }",
+            "{ \"key\": false }",
+            "{ \"key\": null }",
+            "{ \"key\": [ 2, 3 ] }",
+            "{ \"key\": [ 2, \"abc\", { \"sub\": 2 } ] }",
+            "{ \"key\": { \"sub\": 2, \"arr\": [ 2, \"abc\" ] } }",
+            "{ }",
+        ],
+    )
     fun toDocument_validJson(json: String) {
         val attributes: Map<String, AttributeValue> = fromDocument(json)
 
@@ -127,11 +137,13 @@ class AttributeMapperTests {
     }
 
     @ParameterizedTest
-    @ValueSource(strings = [
-        PARTITION_KEY,
-        SORT_KEY,
-        VERSION,
-    ])
+    @ValueSource(
+        strings = [
+            PARTITION_KEY,
+            SORT_KEY,
+            VERSION,
+        ],
+    )
     fun toDocument_missingAttribute(attribute: String) {
         val attributes: Map<String, AttributeValue> = fromDocument("{ \"key\": \"abc\" }") - attribute
 

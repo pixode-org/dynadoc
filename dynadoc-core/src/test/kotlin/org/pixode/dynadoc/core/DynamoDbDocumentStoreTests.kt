@@ -1,15 +1,16 @@
 ﻿package org.pixode.dynadoc.core
 
+import aws.sdk.kotlin.runtime.auth.credentials.StaticCredentialsProvider
 import aws.sdk.kotlin.services.dynamodb.DynamoDbClient
 import aws.sdk.kotlin.services.dynamodb.model.AttributeValue
 import aws.sdk.kotlin.services.dynamodb.model.DynamoDbException
-import aws.sdk.kotlin.runtime.auth.credentials.StaticCredentialsProvider
 import aws.smithy.kotlin.runtime.auth.awscredentials.Credentials
 import aws.smithy.kotlin.runtime.net.url.Url
+import java.util.*
+import java.util.stream.Stream
+import kotlin.random.asKotlinRandom
 import kotlinx.coroutines.flow.toList
 import kotlinx.coroutines.runBlocking
-import org.pixode.dynadoc.assertDocument
-import org.pixode.dynadoc.core.DynamoDbDocumentStoreTests.MethodSources.PREFIX
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.BeforeAll
 import org.junit.jupiter.api.Test
@@ -18,13 +19,12 @@ import org.junit.jupiter.params.ParameterizedTest
 import org.junit.jupiter.params.provider.Arguments
 import org.junit.jupiter.params.provider.MethodSource
 import org.junit.jupiter.params.provider.ValueSource
+import org.pixode.dynadoc.assertDocument
+import org.pixode.dynadoc.core.DynamoDbDocumentStoreTests.MethodSources.PREFIX
 import org.testcontainers.containers.GenericContainer
 import org.testcontainers.containers.wait.strategy.Wait
 import org.testcontainers.junit.jupiter.Container
 import org.testcontainers.junit.jupiter.Testcontainers
-import java.util.*
-import java.util.stream.Stream
-import kotlin.random.asKotlinRandom
 
 private const val JSON_1 = "{\"abc\":\"def\"}"
 private const val JSON_2 = "{\"ghi\":\"jkl\"}"
@@ -111,26 +111,27 @@ class DynamoDbDocumentStoreTests {
     }
 
     @ParameterizedTest
-    @ValueSource(strings = [
-        "\"a\"",
-        "10",
-        "true",
-        "false",
-        "null",
-        "[\"a\"]",
-        "{ \"a\":1, \"$PARTITION_KEY\":2 }",
-        "{ \"a\":1, \"$SORT_KEY\":2 }",
-        "{ \"a\":1, \"$VERSION\":2 }",
-        "{ \"a\":1, \"$DELETED\":2 }",
-        " } { ",
-        "a",
-        "{",
-    ])
+    @ValueSource(
+        strings = [
+            "\"a\"",
+            "10",
+            "true",
+            "false",
+            "null",
+            "[\"a\"]",
+            "{ \"a\":1, \"$PARTITION_KEY\":2 }",
+            "{ \"a\":1, \"$SORT_KEY\":2 }",
+            "{ \"a\":1, \"$VERSION\":2 }",
+            "{ \"a\":1, \"$DELETED\":2 }",
+            " } { ",
+            "a",
+            "{",
+        ],
+    )
     fun updateDocuments_invalidJson(to: String) = runBlocking {
-        assertThrows<IllegalArgumentException>(
-            fun() = runBlocking {
-                updateDocument(to, 0)
-            })
+        assertThrows<IllegalArgumentException> {
+            updateDocument(to, 0)
+        }
 
         val document = store.getDocument(ids[0])
 
@@ -139,10 +140,9 @@ class DynamoDbDocumentStoreTests {
 
     @Test
     fun updateDocuments_genericError() = runBlocking {
-        assertThrows<DynamoDbException>(
-            fun() = runBlocking {
-                updateDocument(JSON_1MB, 0)
-            })
+        assertThrows<DynamoDbException> {
+            updateDocument(JSON_1MB, 0)
+        }
 
         val document = store.getDocument(ids[0])
 
@@ -152,14 +152,13 @@ class DynamoDbDocumentStoreTests {
     @ParameterizedTest
     @ValueSource(booleans = [true, false])
     fun updateDocuments_conflictDocumentDoesNotExist(checkOnly: Boolean) = runBlocking {
-        val exception = assertThrows<UpdateConflictException>(
-            fun() = runBlocking {
-                if (checkOnly) {
-                    checkDocument(10)
-                } else {
-                    updateDocument(JSON_2, 10)
-                }
-            })
+        val exception = assertThrows<UpdateConflictException> {
+            if (checkOnly) {
+                checkDocument(10)
+            } else {
+                updateDocument(JSON_2, 10)
+            }
+        }
 
         val document = store.getDocument(ids[0])
 
@@ -172,14 +171,13 @@ class DynamoDbDocumentStoreTests {
     fun updateDocuments_conflictWrongVersion(checkOnly: Boolean) = runBlocking {
         updateDocument(JSON_1, 0)
 
-        val exception = assertThrows<UpdateConflictException>(
-            fun() = runBlocking {
-                if (checkOnly) {
-                    checkDocument(10)
-                } else {
-                    updateDocument(JSON_2, 10)
-                }
-            })
+        val exception = assertThrows<UpdateConflictException> {
+            if (checkOnly) {
+                checkDocument(10)
+            } else {
+                updateDocument(JSON_2, 10)
+            }
+        }
 
         val document = store.getDocument(ids[0])
 
@@ -192,14 +190,13 @@ class DynamoDbDocumentStoreTests {
     fun updateDocuments_conflictDocumentAlreadyExists(checkOnly: Boolean) = runBlocking {
         updateDocument(JSON_1, 0)
 
-        val exception = assertThrows<UpdateConflictException>(
-            fun() = runBlocking {
-                if (checkOnly) {
-                    checkDocument(0)
-                } else {
-                    updateDocument(JSON_2, 0)
-                }
-            })
+        val exception = assertThrows<UpdateConflictException> {
+            if (checkOnly) {
+                checkDocument(0)
+            } else {
+                updateDocument(JSON_2, 0)
+            }
+        }
 
         val document = store.getDocument(ids[0])
 
@@ -239,20 +236,19 @@ class DynamoDbDocumentStoreTests {
     fun updateDocuments_multipleDocumentsConflict(checkOnly: Boolean) = runBlocking {
         updateDocument(ids[0], JSON_1, 0)
 
-        val exception = assertThrows<UpdateConflictException>(
-            fun() = runBlocking {
-                if (checkOnly) {
-                    store.updateDocuments(
-                        updatedDocuments = listOf(Document(ids[0], JSON_2, 1)),
-                        checkedDocuments = listOf(Document(ids[1], JSON_3, 10)),
-                    )
-                } else {
-                    store.updateDocuments(
-                        Document(ids[0], JSON_2, 1),
-                        Document(ids[1], JSON_3, 10),
-                    )
-                }
-            })
+        val exception = assertThrows<UpdateConflictException> {
+            if (checkOnly) {
+                store.updateDocuments(
+                    updatedDocuments = listOf(Document(ids[0], JSON_2, 1)),
+                    checkedDocuments = listOf(Document(ids[1], JSON_3, 10)),
+                )
+            } else {
+                store.updateDocuments(
+                    Document(ids[0], JSON_2, 1),
+                    Document(ids[1], JSON_3, 10),
+                )
+            }
+        }
 
         val document1 = store.getDocument(ids[0])
         val document2 = store.getDocument(ids[1])
@@ -266,13 +262,12 @@ class DynamoDbDocumentStoreTests {
     fun updateDocuments_multipleDocumentsGenericError() = runBlocking {
         updateDocument(ids[0], JSON_1, 0)
 
-        assertThrows<DynamoDbException>(
-            fun() = runBlocking {
-                store.updateDocuments(
+        assertThrows<DynamoDbException> {
+            store.updateDocuments(
                     Document(ids[0], JSON_2, 1),
                     Document(ids[1], JSON_1MB, 0),
                 )
-            })
+        }
 
         val document1 = store.getDocument(ids[0])
         val document2 = store.getDocument(ids[1])
@@ -530,10 +525,12 @@ class DynamoDbDocumentStoreTests {
             portBindings = listOf("$port:8000")
             setCommand("-jar DynamoDBLocal.jar -sharedDb -inMemory")
             workingDirectory = "/home/dynamodblocal"
-            waitingFor(Wait
-                .forHttp("/")
-                .forPort(8000)
-                .forStatusCode(400))
+            waitingFor(
+                Wait
+                    .forHttp("/")
+                    .forPort(8000)
+                    .forStatusCode(400),
+            )
         }
 
         @BeforeAll
