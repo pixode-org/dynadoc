@@ -17,8 +17,8 @@ data class JsonEntity<out T>(
 )
 
 
-fun <T, U> JsonEntity<T>.modify(builder: T.() -> U) =
-    JsonEntity(id, builder(entity), version)
+fun <T, U> JsonEntity<T>.modify(transform: T.() -> U) =
+    JsonEntity(id, transform(entity), version)
 
 fun <T : Any> createEntity(partitionKey: String, sortKey: String, entity: T) =
     JsonEntity(DocumentKey(partitionKey, sortKey), entity, 0)

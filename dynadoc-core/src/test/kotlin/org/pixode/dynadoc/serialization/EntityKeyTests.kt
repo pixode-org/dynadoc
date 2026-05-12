@@ -79,7 +79,7 @@ class EntityKeyTests {
             StringEntityKey(1),
             StringEntityKey(2, isNull = true),
             StringEntityKey(3),
-            StringEntityKey(4)
+            StringEntityKey(4),
         )
 
         assertEquals(4, result.size)

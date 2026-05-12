@@ -5,6 +5,7 @@ import io.mockk.mockk
 import kotlinx.coroutines.runBlocking
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Test
+import org.junit.jupiter.api.assertNull
 import org.junit.jupiter.api.assertThrows
 import org.pixode.dynadoc.assertUpdateDocuments
 import org.pixode.dynadoc.core.Document
@@ -155,25 +156,25 @@ class BatchBuilderTests {
 
     @Test
     fun modify_withMutationToValue() = runBlocking {
-
         val entity = JsonEntity(ids[0], "abc", 1)
 
-        batchBuilder.modify(entity) { this + "def" }
+        val result = batchBuilder.modify(entity) { reversed() }
         batchBuilder.submit()
 
+        assertEquals("cba", result)
         documentStore.assertUpdateDocuments(
-            updated = listOf(Document(ids[0], jsonFor("abcdef"), 1)),
+            updated = listOf(Document(ids[0], jsonFor("cba"), 1)),
         )
     }
 
     @Test
     fun modify_withMutationToNull() = runBlocking {
-
         val entity = JsonEntity(ids[0], "abc", 1)
 
-        batchBuilder.modify(entity) { null }
+        val result = batchBuilder.modify(entity) { null }
         batchBuilder.submit()
 
+        assertNull(result)
         documentStore.assertUpdateDocuments(
             updated = listOf(Document(ids[0], null, 1)),
         )

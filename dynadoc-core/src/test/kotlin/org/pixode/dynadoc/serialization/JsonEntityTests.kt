@@ -13,9 +13,9 @@ class JsonEntityTests {
     fun modify_nonNull() {
         val entity = JsonEntity(id, "abc", 1)
 
-        val result = entity.modify { "def" }
+        val result = entity.modify { reversed() }
 
-        assertEntity(result, id, "def", 1)
+        assertEntity(result, id, "cba", 1)
     }
 
     @Test

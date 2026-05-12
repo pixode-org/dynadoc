@@ -6,9 +6,9 @@ import aws.sdk.kotlin.services.dynamodb.model.AttributeValue
 import aws.sdk.kotlin.services.dynamodb.model.DynamoDbException
 import aws.smithy.kotlin.runtime.auth.awscredentials.Credentials
 import aws.smithy.kotlin.runtime.net.url.Url
-import java.util.*
+import java.util.UUID
 import java.util.stream.Stream
-import kotlin.random.asKotlinRandom
+import kotlin.random.Random
 import kotlinx.coroutines.flow.toList
 import kotlinx.coroutines.runBlocking
 import org.junit.jupiter.api.Assertions.assertEquals
@@ -264,9 +264,9 @@ class DynamoDbDocumentStoreTests {
 
         assertThrows<DynamoDbException> {
             store.updateDocuments(
-                    Document(ids[0], JSON_2, 1),
-                    Document(ids[1], JSON_1MB, 0),
-                )
+                Document(ids[0], JSON_2, 1),
+                Document(ids[1], JSON_1MB, 0),
+            )
         }
 
         val document1 = store.getDocument(ids[0])
@@ -517,7 +517,7 @@ class DynamoDbDocumentStoreTests {
 
     private companion object Setup {
         lateinit var client: DynamoDbClient
-        var port: Int = Random().asKotlinRandom().nextInt(10000, 32000)
+        var port: Int = Random.nextInt(10000, 32000)
 
         @JvmStatic
         @Container

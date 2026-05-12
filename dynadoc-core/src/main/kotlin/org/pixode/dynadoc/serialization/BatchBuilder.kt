@@ -57,7 +57,7 @@ class BatchBuilder(
                 }
             }
 
-            addCheckedDocuments += document;
+            addCheckedDocuments += document
         }
 
         checkedDocuments += addCheckedDocuments.associateBy { it.id }
@@ -73,4 +73,8 @@ class BatchBuilder(
 }
 
 
-fun <T, U> BatchBuilder.modify(entity: JsonEntity<T>, builder: T.() -> U) = modify(entity.modify(builder))
+fun <T, U> BatchBuilder.modify(entity: JsonEntity<T>, builder: T.() -> U): U {
+    val modifiedEntity = entity.modify(builder)
+    modify(modifiedEntity)
+    return modifiedEntity.entity
+}
