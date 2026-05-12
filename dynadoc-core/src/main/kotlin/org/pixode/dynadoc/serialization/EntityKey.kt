@@ -8,16 +8,16 @@ interface EntityKey<out E> {
 }
 
 
-suspend inline fun <K : EntityKey<E>, reified E : Any> EntityStore.getEntities(
+suspend inline fun <K : EntityKey<E>, reified E : Any> EntityStore.get(
     keys: Iterable<K>,
 ): List<JsonEntity<E>?> =
     getEntities<E>(keys.map { it.toDocumentKey() })
         .map { it.ifExists() }
 
-suspend inline fun <K : EntityKey<E>, reified E : Any> EntityStore.getEntities(vararg keys: K): List<JsonEntity<E>?> =
-    getEntities(keys.toList())
+suspend inline fun <K : EntityKey<E>, reified E : Any> EntityStore.get(vararg keys: K): List<JsonEntity<E>?> =
+    get(keys.toList())
 
-suspend inline fun <K : EntityKey<E>, reified E : Any> EntityStore.getEntity(key: K): JsonEntity<E>? =
+suspend inline fun <K : EntityKey<E>, reified E : Any> EntityStore.get(key: K): JsonEntity<E>? =
     getEntity<E>(key.toDocumentKey()).ifExists()
 
 @Suppress("UNCHECKED_CAST")
@@ -26,7 +26,7 @@ suspend inline fun <
     reified E1 : Any,
     K2 : EntityKey<E2>,
     reified E2 : Any,
-    > EntityStore.getEntities(key1: K1, key2: K2): Pair<JsonEntity<E1>?, JsonEntity<E2>?> {
+    > EntityStore.get(key1: K1, key2: K2): Pair<JsonEntity<E1>?, JsonEntity<E2>?> {
     val result = getEntities(
         listOf(
             key1.toDocumentKey() to typeOf<E1>(),
@@ -47,7 +47,7 @@ suspend inline fun <
     reified E2 : Any,
     K3 : EntityKey<E3>,
     reified E3 : Any,
-    > EntityStore.getEntities(
+    > EntityStore.get(
     key1: K1,
     key2: K2,
     key3: K3,

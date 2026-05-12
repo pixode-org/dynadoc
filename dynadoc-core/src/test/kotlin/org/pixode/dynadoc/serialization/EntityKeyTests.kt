@@ -13,11 +13,11 @@ class EntityKeyTests {
     private val documentStore: DocumentStore = TestSerializer.createMockDocumentStore()
     private val store: EntityStore = EntityStore(documentStore, TestSerializer)
 
-    //region getEntities
+    //region get
 
     @Test
     fun getEntity_single() = runBlocking {
-        val result = store.getEntity(StringEntityKey(1))
+        val result = store.get(StringEntityKey(1))
 
         assertNotNull(result)
         assertEntity(result, ids[1], "document_1", 1)
@@ -25,14 +25,14 @@ class EntityKeyTests {
 
     @Test
     fun getEntity_singleNull() = runBlocking {
-        val result = store.getEntity(StringEntityKey(1, isNull = true))
+        val result = store.get(StringEntityKey(1, isNull = true))
 
         assertNull(result)
     }
 
     @Test
     fun getEntities_pair() = runBlocking {
-        val (result1, result2) = store.getEntities(StringEntityKey(1), IntEntityKey(2))
+        val (result1, result2) = store.get(StringEntityKey(1), IntEntityKey(2))
 
         assertNotNull(result1)
         assertEntity(result1, ids[1], "document_1", 1)
@@ -42,7 +42,7 @@ class EntityKeyTests {
 
     @Test
     fun getEntities_pairNull() = runBlocking {
-        val (result1, result2) = store.getEntities(StringEntityKey(1, isNull = true), IntEntityKey(2, isNull = true))
+        val (result1, result2) = store.get(StringEntityKey(1, isNull = true), IntEntityKey(2, isNull = true))
 
         assertNull(result1)
         assertNull(result2)
@@ -50,7 +50,7 @@ class EntityKeyTests {
 
     @Test
     fun getEntities_triple() = runBlocking {
-        val (result1, result2, result3) = store.getEntities(StringEntityKey(1), IntEntityKey(2), StringEntityKey(3))
+        val (result1, result2, result3) = store.get(StringEntityKey(1), IntEntityKey(2), StringEntityKey(3))
 
         assertNotNull(result1)
         assertEntity(result1, ids[1], "document_1", 1)
@@ -62,7 +62,7 @@ class EntityKeyTests {
 
     @Test
     fun getEntities_tripleNull() = runBlocking {
-        val (result1, result2, result3) = store.getEntities(
+        val (result1, result2, result3) = store.get(
             StringEntityKey(1, isNull = true),
             IntEntityKey(2, isNull = true),
             IntEntityKey(3, isNull = true),
@@ -75,7 +75,7 @@ class EntityKeyTests {
 
     @Test
     fun getEntities_list() = runBlocking {
-        val result = store.getEntities(
+        val result = store.get(
             StringEntityKey(1),
             StringEntityKey(2, isNull = true),
             StringEntityKey(3),
