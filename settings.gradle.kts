@@ -6,6 +6,5 @@ plugins {
 rootProject.name = "dynadoc"
 include(
     "dynadoc-core",
-    "dynadoc-kotlinx-serialization",
     "dynadoc-jackson",
 )
