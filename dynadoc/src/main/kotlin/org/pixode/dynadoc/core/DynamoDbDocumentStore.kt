@@ -3,6 +3,7 @@
 import aws.sdk.kotlin.services.dynamodb.DynamoDbClient
 import aws.sdk.kotlin.services.dynamodb.batchGetItem
 import aws.sdk.kotlin.services.dynamodb.createTable
+import aws.sdk.kotlin.services.dynamodb.getItem
 import aws.sdk.kotlin.services.dynamodb.model.AttributeDefinition
 import aws.sdk.kotlin.services.dynamodb.model.AttributeValue
 import aws.sdk.kotlin.services.dynamodb.model.BillingMode
@@ -112,27 +113,42 @@ class DynamoDbDocumentStore(
         }
 
         return flow {
-            val response = client.batchGetItem {
-                requestItems = mapOf(
-                    tableName to KeysAndAttributes {
-                        keys = idList.distinct().map(attributeMapper::fromDocumentKey)
-                        consistentRead = consistentReads
-                    },
-                )
-            }
-
-            val responses = response.responses
-            if (responses != null) {
-                val documents: Map<DocumentKey, Document> = responses.values
-                    .flatten()
-                    .map(attributeMapper::toDocument)
-                    .associateBy { it.id }
-
-                val result = idList.map { id ->
-                    documents[id] ?: Document(id, null, 0)
+            if (idList.size == 1) {
+                val getItemResponse = client.getItem {
+                    tableName = this@DynamoDbDocumentStore.tableName
+                    key = attributeMapper.fromDocumentKey(idList[0])
+                    consistentRead = consistentReads
+                }
+                val response = getItemResponse.item
+                if (response == null) {
+                    emit(Document(idList[0], null, 0))
+                } else {
+                    emit(attributeMapper.toDocument(response))
                 }
 
-                result.asFlow().collect(this)
+            } else {
+                val batchResponse = client.batchGetItem {
+                    requestItems = mapOf(
+                        tableName to KeysAndAttributes {
+                            keys = idList.distinct().map(attributeMapper::fromDocumentKey)
+                            consistentRead = consistentReads
+                        },
+                    )
+                }
+
+                val responses = batchResponse.responses
+                if (responses != null) {
+                    val documents: Map<DocumentKey, Document> = responses.values
+                        .flatten()
+                        .map(attributeMapper::toDocument)
+                        .associateBy { it.id }
+
+                    val result = idList.map { id ->
+                        documents[id] ?: Document(id, null, 0)
+                    }
+
+                    result.asFlow().collect(this)
+                }
             }
         }
     }
