@@ -33,6 +33,7 @@ import kotlinx.coroutines.flow.flowOf
 class DynamoDbDocumentStore(
     private val client: DynamoDbClient,
     private val tableName: String,
+    private val consistentReads: Boolean = false,
     expiration: Duration = Duration.ofDays(30),
     clock: Clock = Clock.systemUTC(),
 ) : DocumentStore {
@@ -115,7 +116,7 @@ class DynamoDbDocumentStore(
                 requestItems = mapOf(
                     tableName to KeysAndAttributes {
                         keys = idList.distinct().map(attributeMapper::fromDocumentKey)
-                        consistentRead = true
+                        consistentRead = consistentReads
                     },
                 )
             }
