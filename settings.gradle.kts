@@ -5,6 +5,6 @@ plugins {
 
 rootProject.name = "dynadoc"
 include(
-    "dynadoc-core",
+    "dynadoc",
     "dynadoc-jackson",
 )

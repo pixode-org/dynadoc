@@ -2,47 +2,41 @@ import org.jetbrains.kotlin.gradle.dsl.JvmTarget
 
 allprojects {
     group = "org.pixode"
-    version = "2.1.1"
+    version = "3.0.0"
 }
 
 plugins {
-    // Apply the org.jetbrains.kotlin.jvm plugin to add support for Kotlin.
-    kotlin("jvm") version "2.3.21"
-    id("org.jetbrains.kotlinx.kover") version "0.8.0"
-    id("maven-publish")
-    id("signing")
+    kotlin("jvm") version "2.3.21" apply false
+    id("org.jetbrains.kotlinx.kover") version "0.9.8"
 }
 
 subprojects {
-    apply(plugin = "org.jetbrains.kotlin.jvm")
-    apply(plugin = "org.jetbrains.kotlinx.kover")
-    // Apply the java-library plugin for API and implementation separation.
-    apply(plugin = "java-library")
-    apply(plugin = "maven-publish")
-    apply(plugin = "signing")
+    pluginManager.apply("org.jetbrains.kotlin.jvm")
+    pluginManager.apply("org.jetbrains.kotlinx.kover")
+    pluginManager.apply("java-library")
+    pluginManager.apply("maven-publish")
+    pluginManager.apply("signing")
 
-    kotlin {
+    tasks.withType<org.jetbrains.kotlin.gradle.tasks.KotlinCompile>().configureEach {
         compilerOptions {
             jvmTarget = JvmTarget.JVM_1_8
         }
     }
 
-    java {
-        sourceCompatibility = JavaVersion.VERSION_1_8
+    pluginManager.withPlugin("java") {
+        configure<JavaPluginExtension> {
+            sourceCompatibility = JavaVersion.VERSION_1_8
+            withSourcesJar()
+            withJavadocJar()
+        }
     }
 
     repositories {
         mavenCentral()
     }
 
-    tasks.named<Test>("test") {
-        // Use JUnit Platform for unit tests.
+    tasks.withType<Test>().configureEach {
         useJUnitPlatform()
-    }
-
-    configure<JavaPluginExtension> {
-        withSourcesJar()
-        withJavadocJar()
     }
 }
 
@@ -51,6 +45,6 @@ repositories {
 }
 
 dependencies {
-    kover(project(":dynadoc-core"))
+    kover(project(":dynadoc"))
     kover(project(":dynadoc-jackson"))
 }
