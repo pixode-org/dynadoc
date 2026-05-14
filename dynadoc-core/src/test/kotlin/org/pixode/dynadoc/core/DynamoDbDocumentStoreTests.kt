@@ -211,12 +211,12 @@ class DynamoDbDocumentStoreTests {
 
         store.updateDocuments(
             updatedDocuments = listOf(
-                Document(ids[0], "{\"v\":\"1\"}", 1),
-                Document(ids[2], "{\"v\":\"2\"}", 0),
+                parseDocument(ids[0], "{\"v\":\"1\"}", 1),
+                parseDocument(ids[2], "{\"v\":\"2\"}", 0),
             ),
             checkedDocuments = listOf(
-                Document(ids[1], "{\"v\":\"3\"}", 1),
-                Document(ids[3], "{\"v\":\"4\"}", 0),
+                parseDocument(ids[1], "{\"v\":\"3\"}", 1),
+                parseDocument(ids[3], "{\"v\":\"4\"}", 0),
             ),
         )
 
@@ -239,13 +239,13 @@ class DynamoDbDocumentStoreTests {
         val exception = assertThrows<UpdateConflictException> {
             if (checkOnly) {
                 store.updateDocuments(
-                    updatedDocuments = listOf(Document(ids[0], JSON_2, 1)),
-                    checkedDocuments = listOf(Document(ids[1], JSON_3, 10)),
+                    updatedDocuments = listOf(parseDocument(ids[0], JSON_2, 1)),
+                    checkedDocuments = listOf(parseDocument(ids[1], JSON_3, 10)),
                 )
             } else {
                 store.updateDocuments(
-                    Document(ids[0], JSON_2, 1),
-                    Document(ids[1], JSON_3, 10),
+                    parseDocument(ids[0], JSON_2, 1),
+                    parseDocument(ids[1], JSON_3, 10),
                 )
             }
         }
@@ -264,8 +264,8 @@ class DynamoDbDocumentStoreTests {
 
         assertThrows<DynamoDbException> {
             store.updateDocuments(
-                Document(ids[0], JSON_2, 1),
-                Document(ids[1], JSON_1MB, 0),
+                parseDocument(ids[0], JSON_2, 1),
+                parseDocument(ids[1], JSON_1MB, 0),
             )
         }
 
@@ -328,7 +328,7 @@ class DynamoDbDocumentStoreTests {
     @Test
     fun query_filterSortKey() = runBlocking {
         val documents = (0..9).map { i ->
-            Document(DocumentKey(partitionKey, "ABC0$i"), "{\"a\":$i}", 0)
+            parseDocument(DocumentKey(partitionKey, "ABC0$i"), "{\"a\":$i}", 0)
         }
         store.updateDocuments(*documents.toTypedArray())
 
@@ -348,7 +348,7 @@ class DynamoDbDocumentStoreTests {
     @Test
     fun query_filterNonKey() = runBlocking {
         val documents = (0..9).map { i ->
-            Document(DocumentKey(partitionKey, "ABC0$i"), "{\"a\":$i}", 0)
+            parseDocument(DocumentKey(partitionKey, "ABC0$i"), "{\"a\":$i}", 0)
         }
         store.updateDocuments(*documents.toTypedArray())
 
@@ -368,7 +368,7 @@ class DynamoDbDocumentStoreTests {
     @Test
     fun query_pagination() = runBlocking {
         val documents = (100..199).map { i ->
-            Document(DocumentKey(partitionKey, "ABC0$i"), "{\"b\":\"$STRING_100KB\"}", 0)
+            parseDocument(DocumentKey(partitionKey, "ABC0$i"), "{\"b\":\"$STRING_100KB\"}", 0)
         }
         documents.forEach { document -> store.updateDocuments(document) }
 
@@ -392,7 +392,7 @@ class DynamoDbDocumentStoreTests {
     @Test
     fun scan_filterAttribute() = runBlocking {
         val documents = (0..9).map { i ->
-            Document(
+            parseDocument(
                 id = DocumentKey("${partitionKey}_$i", "0000"),
                 body = "{\"b\":\"value $i\"}",
                 version = 0,
@@ -415,7 +415,7 @@ class DynamoDbDocumentStoreTests {
     @Test
     fun scan_pagination() = runBlocking {
         val documents = (100..199).map { i ->
-            Document(
+            parseDocument(
                 id = DocumentKey("${partitionKey}_$i", "0000"),
                 body = "{\"b\":\"$STRING_100KB\"}",
                 version = 0,
@@ -495,19 +495,19 @@ class DynamoDbDocumentStoreTests {
         updateDocument(ids[0], body, version)
 
     private suspend fun updateDocument(id: DocumentKey, body: String?, version: Long) =
-        store.updateDocuments(Document(id, body, version))
+        store.updateDocuments(parseDocument(id, body, version))
 
     private suspend fun checkDocument(version: Long) =
         store.updateDocuments(
             updatedDocuments = emptyList(),
-            checkedDocuments = listOf(Document(ids[0], "{\"ignored\":\"ignored\"}", version)),
+            checkedDocuments = listOf(parseDocument(ids[0], "{\"ignored\":\"ignored\"}", version)),
         )
 
     private fun assertDocuments(actual: List<Document>, expected: List<Document>) {
         assertEquals(expected.size, actual.size)
 
         repeat(actual.size) { i ->
-            assertDocument(actual[i], expected[i].id, expected[i].body, 1)
+            assertDocument(actual[i], expected[i].id, expected[i].body.toString(), 1)
         }
     }
 

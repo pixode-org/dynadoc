@@ -2,18 +2,20 @@
 
 import kotlin.reflect.KType
 import kotlin.reflect.typeOf
+import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonElement
 import org.pixode.dynadoc.core.Document
 
 interface JsonSerializer {
     /**
      * Serializes the specified object to a JSON string.
      */
-    fun serialize(entity: Any): String
+    fun serialize(entity: Any): JsonElement
 
     /**
      * Deserializes a JSON string to the specified type.
      */
-    fun <T : Any> deserialize(json: String, type: KType): T
+    fun <T : Any> deserialize(json: JsonElement, type: KType): T
 }
 
 

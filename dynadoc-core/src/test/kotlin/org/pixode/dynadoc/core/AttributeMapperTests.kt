@@ -70,9 +70,7 @@ class AttributeMapperTests {
             "false",
             "null",
             "[\"a\"]",
-            " } { ",
             "a",
-            "{",
         ],
     )
     fun fromDocument_invalidJsonObject(json: String) {
@@ -80,7 +78,7 @@ class AttributeMapperTests {
             fromDocument(json)
         }
 
-        assertEquals("The document must be a valid JSON object.", exception.message)
+        assertEquals("The document must be a valid JSON object", exception.message)
     }
 
     @ParameterizedTest
@@ -97,7 +95,7 @@ class AttributeMapperTests {
             fromDocument("{\"a\":1,\"$attribute\":2}")
         }
 
-        assertEquals("The document cannot use the special attribute \"$attribute\".", exception.message)
+        assertEquals("The document cannot use the special attribute \"$attribute\"", exception.message)
     }
 
     //endregion fromDocument
@@ -158,7 +156,7 @@ class AttributeMapperTests {
 
     //region Helper Methods
 
-    private fun fromDocument(body: String?) = attributeMapper.fromDocument(Document(id, body, 1))
+    private fun fromDocument(body: String?) = attributeMapper.fromDocument(parseDocument(id, body, 1))
 
     private fun toDocument(attributes: Map<String, AttributeValue>) = attributeMapper.toDocument(attributes)
 

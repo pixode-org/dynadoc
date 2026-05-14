@@ -5,8 +5,6 @@ import java.math.BigDecimal
 import java.time.Clock
 import java.time.Duration
 import java.time.Instant
-import kotlinx.serialization.SerializationException
-import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonNull
@@ -27,12 +25,12 @@ class AttributeMapper(
     private val clock: Clock,
 ) {
     fun toDocument(attributes: Map<String, AttributeValue>): Document {
-        val body: String? =
+        val body: JsonObject? =
             if (attributes[DELETED] != null) {
                 null
             } else {
                 val bodyMap: Map<String, AttributeValue> = attributes.filterKeys { it !in systemAttributes }
-                Json.encodeToString(bodyMap.mapValues { (_, v) -> attributeValueToJson(v) })
+                JsonObject(bodyMap.mapValues { (_, v) -> attributeValueToJson(v) })
             }
 
         return Document(
@@ -44,19 +42,17 @@ class AttributeMapper(
 
     fun fromDocument(document: Document): Map<String, AttributeValue> = buildMap {
         if (document.body != null) {
-            require(jsonObject.containsMatchIn(document.body)) {
-                "The document must be a valid JSON object."
+            require(document.body is JsonObject) {
+                "The document must be a valid JSON object"
             }
 
-            val attributes: Map<String, AttributeValue> = try {
-                jsonToAttributeValueMap(document.body)
-            } catch (e: SerializationException) {
-                throw IllegalArgumentException("The document must be a valid JSON object.", e)
+            val attributes: Map<String, AttributeValue> = document.body.mapValues { (_, v) ->
+                jsonElementToAttributeValue(v)
             }
 
             val specialAttribute: String? = systemAttributes.firstOrNull { key -> attributes.containsKey(key) }
             require(specialAttribute == null) {
-                "The document cannot use the special attribute \"$specialAttribute\"."
+                "The document cannot use the special attribute \"$specialAttribute\""
             }
 
             putAll(attributes)
@@ -80,9 +76,6 @@ class AttributeMapper(
         partitionKey = (attributes.getValue(PARTITION_KEY) as AttributeValue.S).value,
         sortKey = (attributes.getValue(SORT_KEY) as AttributeValue.S).value,
     )
-
-    private fun jsonToAttributeValueMap(json: String): Map<String, AttributeValue> =
-        (Json.parseToJsonElement(json) as JsonObject).mapValues { (_, v) -> jsonElementToAttributeValue(v) }
 
     private fun jsonElementToAttributeValue(element: JsonElement): AttributeValue = when (element) {
         is JsonNull -> AttributeValue.Null(true)

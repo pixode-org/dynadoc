@@ -5,6 +5,10 @@ import io.mockk.mockk
 import kotlin.reflect.KType
 import kotlin.reflect.typeOf
 import kotlinx.coroutines.flow.asFlow
+import kotlinx.serialization.json.JsonElement
+import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.jsonPrimitive
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.opentest4j.AssertionFailedError
 import org.pixode.dynadoc.core.Document
@@ -12,32 +16,31 @@ import org.pixode.dynadoc.core.DocumentKey
 import org.pixode.dynadoc.core.DocumentStore
 
 object TestSerializer : JsonSerializer {
-    private val regex = Regex("\\{\"(?<key>(string|int))\":\"(?<value>[^\"]*)\"}")
+    fun jsonFor(value: String) = JsonObject(mapOf("string" to JsonPrimitive(value)))
+    fun jsonFor(value: Int) = JsonObject(mapOf("int" to JsonPrimitive(value)))
 
-    fun jsonFor(value: String) = "{\"string\":\"$value\"}"
-    fun jsonFor(value: Int) = "{\"int\":\"$value\"}"
-
-    override fun serialize(entity: Any): String {
+    override fun serialize(entity: Any): JsonElement {
         assertEquals(String::class.java, entity.javaClass)
         return jsonFor(entity as String)
     }
 
-    override fun <T : Any> deserialize(json: String, type: KType): T {
-        val match: MatchResult = checkNotNull(regex.matchEntire(json))
+    override fun <T : Any> deserialize(json: JsonElement, type: KType): T {
+        require(json is JsonObject)
 
-        val key: MatchGroup = checkNotNull(match.groups["key"])
-        val value: MatchGroup = checkNotNull(match.groups["value"])
+        val entries = json.toMap().entries
+        require(entries.size == 1)
+        val (key: String, value: JsonElement) = entries.first()
 
         @Suppress("UNCHECKED_CAST")
         return when (type) {
             typeOf<String>() -> {
-                assertEquals(key.value, "string")
-                value.value as T
+                assertEquals(key, "string")
+                value.jsonPrimitive.content as T
             }
 
             typeOf<Int>() -> {
-                assertEquals(key.value, "int")
-                value.value.toInt() as T
+                assertEquals(key, "int")
+                value.jsonPrimitive.content.toInt() as T
             }
 
             else -> throw AssertionFailedError("Invalid type: $type")
