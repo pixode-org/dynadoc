@@ -27,13 +27,13 @@ class AttributeMapperTests {
     @ParameterizedTest
     @CsvSource(
         value = [
-            "{ \"key\": \"abc\" }        | S",
-            "{ \"key\": 999 }            | N",
-            "{ \"key\": true }           | Bool",
-            "{ \"key\": false }          | Bool",
-            "{ \"key\": null }           | Null",
-            "{ \"key\": [ 2, 3 ] }       | L",
-            "{ \"key\": { \"sub\": 2 } } | M",
+            """ { "key": "abc" }          | S """,
+            """ { "key": 999 }            | N """,
+            """ { "key": true }           | Bool """,
+            """ { "key": false }          | Bool """,
+            """ { "key": null }           | Null """,
+            """ { "key": [ 2, 3 ] }       | L """,
+            """ { "key": { "sub": 2 } }   | M """,
         ],
         delimiter = '|',
     )
@@ -64,13 +64,13 @@ class AttributeMapperTests {
     @ParameterizedTest
     @ValueSource(
         strings = [
-            "\"a\"",
-            "10",
-            "true",
-            "false",
-            "null",
-            "[\"a\"]",
-            "a",
+            """ "a" """,
+            """ 10 """,
+            """ true """,
+            """ false """,
+            """ null """,
+            """ ["a"] """,
+            """ a """,
         ],
     )
     fun fromDocument_invalidJsonObject(json: String) {
@@ -92,7 +92,7 @@ class AttributeMapperTests {
     )
     fun fromDocument_invalidAttributes(attribute: String) {
         val exception = assertThrows<IllegalArgumentException> {
-            fromDocument("{\"a\":1,\"$attribute\":2}")
+            fromDocument(""" {"a":1,"$attribute":2} """)
         }
 
         assertEquals("The document cannot use the special attribute \"$attribute\"", exception.message)
@@ -105,16 +105,16 @@ class AttributeMapperTests {
     @ParameterizedTest
     @ValueSource(
         strings = [
-            "{ \"key\": \"abc\" }",
-            " \t \n \r { \"key\": \"abc\" } ",
-            "{ \"key\": 999 }",
-            "{ \"key\": true }",
-            "{ \"key\": false }",
-            "{ \"key\": null }",
-            "{ \"key\": [ 2, 3 ] }",
-            "{ \"key\": [ 2, \"abc\", { \"sub\": 2 } ] }",
-            "{ \"key\": { \"sub\": 2, \"arr\": [ 2, \"abc\" ] } }",
-            "{ }",
+            """ { "key": "abc" } """,
+            """ ${"\t \n \r"} { "key": "abc" } """,
+            """ { "key": 999 } """,
+            """ { "key": true } """,
+            """ { "key": false } """,
+            """ { "key": null } """,
+            """ { "key": [ 2, 3 ] } """,
+            """ { "key": [ 2, "abc", { "sub": 2 } ] } """,
+            """ { "key": { "sub": 2, "arr": [ 2, "abc" ] } } """,
+            """ { } """,
         ],
     )
     fun toDocument_validJson(json: String) {
@@ -143,7 +143,7 @@ class AttributeMapperTests {
         ],
     )
     fun toDocument_missingAttribute(attribute: String) {
-        val attributes: Map<String, AttributeValue> = fromDocument("{ \"key\": \"abc\" }") - attribute
+        val attributes: Map<String, AttributeValue> = fromDocument(""" { "key": "abc" } """) - attribute
 
         val exception = assertThrows<NoSuchElementException> {
             toDocument(attributes)

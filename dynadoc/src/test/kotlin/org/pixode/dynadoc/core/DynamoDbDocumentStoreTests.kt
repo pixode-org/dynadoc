@@ -26,10 +26,10 @@ import org.testcontainers.containers.wait.strategy.Wait
 import org.testcontainers.junit.jupiter.Container
 import org.testcontainers.junit.jupiter.Testcontainers
 
-private const val JSON_1 = "{\"abc\":\"def\"}"
-private const val JSON_2 = "{\"ghi\":\"jkl\"}"
-private const val JSON_3 = "{\"mno\":\"pqr\"}"
-private val JSON_1MB = "{\"key\":\"${"a".repeat(1024 * 1024)}\"}"
+private const val JSON_1 = """ {"abc":"def"} """
+private const val JSON_2 = """ {"ghi":"jkl"} """
+private const val JSON_3 = """ {"mno":"pqr"} """
+private val JSON_1MB = """ {"key":"${"a".repeat(1024 * 1024)}"} """
 private val STRING_100KB = "a".repeat(100 * 1024)
 
 @Testcontainers
@@ -113,19 +113,19 @@ class DynamoDbDocumentStoreTests {
     @ParameterizedTest
     @ValueSource(
         strings = [
-            "\"a\"",
-            "10",
-            "true",
-            "false",
-            "null",
-            "[\"a\"]",
-            "{ \"a\":1, \"$PARTITION_KEY\":2 }",
-            "{ \"a\":1, \"$SORT_KEY\":2 }",
-            "{ \"a\":1, \"$VERSION\":2 }",
-            "{ \"a\":1, \"$DELETED\":2 }",
-            " } { ",
-            "a",
-            "{",
+            """ "a" """,
+            """ 10 """,
+            """ true """,
+            """ false """,
+            """ null """,
+            """ ["a"] """,
+            """ { "a":1, "$PARTITION_KEY":2 } """,
+            """ { "a":1, "$SORT_KEY":2 } """,
+            """ { "a":1, "$VERSION":2 } """,
+            """ { "a":1, "$DELETED":2 } """,
+            """ } { """,
+            """ a """,
+            """ { """,
         ],
     )
     fun updateDocuments_invalidJson(to: String) = runBlocking {
@@ -211,12 +211,12 @@ class DynamoDbDocumentStoreTests {
 
         store.updateDocuments(
             updatedDocuments = listOf(
-                parseDocument(ids[0], "{\"v\":\"1\"}", 1),
-                parseDocument(ids[2], "{\"v\":\"2\"}", 0),
+                parseDocument(ids[0], """ {"v":"1"} """, 1),
+                parseDocument(ids[2], """ {"v":"2"} """, 0),
             ),
             checkedDocuments = listOf(
-                parseDocument(ids[1], "{\"v\":\"3\"}", 1),
-                parseDocument(ids[3], "{\"v\":\"4\"}", 0),
+                parseDocument(ids[1], """ {"v":"3"} """, 1),
+                parseDocument(ids[3], """ {"v":"4"} """, 0),
             ),
         )
 
@@ -225,9 +225,9 @@ class DynamoDbDocumentStoreTests {
         val document3 = store.getDocument(ids[2])
         val document4 = store.getDocument(ids[3])
 
-        assertDocument(document1, ids[0], "{\"v\":\"1\"}", 2)
+        assertDocument(document1, ids[0], """ {"v":"1"} """, 2)
         assertDocument(document2, ids[1], JSON_2, 1)
-        assertDocument(document3, ids[2], "{\"v\":\"2\"}", 1)
+        assertDocument(document3, ids[2], """ {"v":"2"} """, 1)
         assertDocument(document4, ids[3], null, 0)
     }
 
@@ -328,7 +328,7 @@ class DynamoDbDocumentStoreTests {
     @Test
     fun query_filterSortKey() = runBlocking {
         val documents = (0..9).map { i ->
-            parseDocument(DocumentKey(partitionKey, "ABC0$i"), "{\"a\":$i}", 0)
+            parseDocument(DocumentKey(partitionKey, "ABC0$i"), """ {"a":$i} """, 0)
         }
         store.updateDocuments(*documents.toTypedArray())
 
@@ -348,7 +348,7 @@ class DynamoDbDocumentStoreTests {
     @Test
     fun query_filterNonKey() = runBlocking {
         val documents = (0..9).map { i ->
-            parseDocument(DocumentKey(partitionKey, "ABC0$i"), "{\"a\":$i}", 0)
+            parseDocument(DocumentKey(partitionKey, "ABC0$i"), """ {"a":$i} """, 0)
         }
         store.updateDocuments(*documents.toTypedArray())
 
@@ -368,7 +368,7 @@ class DynamoDbDocumentStoreTests {
     @Test
     fun query_pagination() = runBlocking {
         val documents = (100..199).map { i ->
-            parseDocument(DocumentKey(partitionKey, "ABC0$i"), "{\"b\":\"$STRING_100KB\"}", 0)
+            parseDocument(DocumentKey(partitionKey, "ABC0$i"), """ {"b":"$STRING_100KB"} """, 0)
         }
         documents.forEach { document -> store.updateDocuments(document) }
 
@@ -394,7 +394,7 @@ class DynamoDbDocumentStoreTests {
         val documents = (0..9).map { i ->
             parseDocument(
                 id = DocumentKey("${partitionKey}_$i", "0000"),
-                body = "{\"b\":\"value $i\"}",
+                body = """ {"b":"value $i"} """,
                 version = 0,
             )
         }
@@ -417,7 +417,7 @@ class DynamoDbDocumentStoreTests {
         val documents = (100..199).map { i ->
             parseDocument(
                 id = DocumentKey("${partitionKey}_$i", "0000"),
-                body = "{\"b\":\"$STRING_100KB\"}",
+                body = """ {"b":"$STRING_100KB"} """,
                 version = 0,
             )
         }
@@ -461,27 +461,27 @@ class DynamoDbDocumentStoreTests {
         @JvmStatic
         fun getDocuments_jsonDeserialization(): Stream<String> {
             val scalars: List<String> = listOf(
-                "1234567890.0987654321",
-                "\"text\"",
-                "true",
-                "false",
-                "null",
+                """ 1234567890.0987654321 """,
+                """ "text" """,
+                """ true """,
+                """ false """,
+                """ null """,
             )
 
             val firstLevel: List<String> = scalars.map {
-                "{ \"a\": $it }"
-            } + "{ }"
+                """ { "a": $it } """
+            } + """ { } """
 
             val nestedObjects = firstLevel.map {
-                "{ \"b\": $it }"
+                """ { "b": $it } """
             }
 
             val arrayOfObjects = (scalars + firstLevel).map {
                 val repeat = "$it, $it, $it"
-                "{ \"b\": [ $repeat ] }"
+                """ { "b": [ $repeat ] } """
             }
 
-            val mixedArray = "{ \"c\": [ ${(scalars + firstLevel).joinToString()} ] }"
+            val mixedArray = """ { "c": [ ${(scalars + firstLevel).joinToString()} ] } """
 
             return (firstLevel + nestedObjects + arrayOfObjects + mixedArray).stream()
         }
@@ -500,7 +500,7 @@ class DynamoDbDocumentStoreTests {
     private suspend fun checkDocument(version: Long) =
         store.updateDocuments(
             updatedDocuments = emptyList(),
-            checkedDocuments = listOf(parseDocument(ids[0], "{\"ignored\":\"ignored\"}", version)),
+            checkedDocuments = listOf(parseDocument(ids[0], """ {"ignored":"ignored"} """, version)),
         )
 
     private fun assertDocuments(actual: List<Document>, expected: List<Document>) {
