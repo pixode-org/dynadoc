@@ -52,17 +52,17 @@ data class DocumentKey(
 
 The following dependencies should be added to the project:
 
-- [dynadoc](https://central.sonatype.com/artifact/org.pixode/dynadoc-core): The core library, responsible for storing and retrieving JSON documents in DynamoDB.
+- [dynadoc-core](https://central.sonatype.com/artifact/org.pixode/dynadoc-core): The core library, responsible for storing and retrieving JSON documents in DynamoDB.
 - [dynadoc-kotlinx-serialization](https://central.sonatype.com/artifact/org.pixode/dynadoc-kotlinx-serialization): The library in charge of serializing and deserializing JSON into Kotlin objects. This library relies internally on the `kotlinx-serialization-json` library to handle JSON serialization.
 
 ### Initialization
 
-Dynadoc requires an instance of a `DynamoDbAsyncClient` object to construct the base `DynamoDbDocumentStore` object.
+Dynadoc requires an instance of a `DynamoDbClient` object to construct the base `DynamoDbDocumentStore` object.
 
 ```kotlin
-val client: DynamoDbAsyncClient = DynamoDbAsyncClient.builder()
-    .credentialsProvider(DefaultCredentialsProvider.create())
-    .build()
+val client: DynamoDbClient = DynamoDbClient {
+    credentialsProvider = DefaultChainCredentialsProvider()
+}
 
 val documentStore: DynamoDbDocumentStore = DynamoDbDocumentStore(client, "tablename")
 ```
@@ -73,7 +73,7 @@ Then, an `EntityStore` object should be instantiated:
 val entityStore: EntityStore = EntityStore(documentStore, DefaultJsonSerializer)
 ```
 
-The `DefaultJsonSerializer` singleton relies on the default `Json` object, but it is possible to create an instance of the `KotlinJsonSerializer` and provide a custom `Json` object to customise the serializer settings. 
+The `DefaultJsonSerializer` singleton relies on the default `Json` object, but it is possible to create an instance of the `KotlinJsonSerializer` and provide a custom `Json` object to customize the serializer settings. 
 
 ### Usage with dependency injection
 
@@ -82,12 +82,12 @@ When using a dependency injection framework such as Guice, a factory function su
 ```kotlin
 @Provides
 @Singleton
-fun entityStore(awsCredentialsProvider: AwsCredentialsProvider): EntityStore {
-    val client: DynamoDbAsyncClient = DynamoDbAsyncClient.builder()
-        .credentialsProvider(awsCredentialsProvider)
-        .build()
+fun entityStore(awsCredentialsProvider: CredentialsProvider): EntityStore {
+    val client = DynamoDbClient {
+        credentialsProvider = CredentialsProvider
+    }
 
-    val documentStore: DynamoDbDocumentStore = DynamoDbDocumentStore(client, "tablename")
+    val documentStore = DynamoDbDocumentStore(client, "tablename")
     
     return EntityStore(documentStore, DefaultJsonSerializer)
 }
@@ -154,7 +154,7 @@ If the document does not exist, this method will return a "shadow" `JsonEntity<T
 It is possible to ensure the document exists by using the `ifExists` function.
 
 ```kotlin
-val existingEntity = entity.ifExists() ?: error("The entity was not found.")
+val existingEntity: JsonEntity<Product> = entity.ifExists() ?: error("The entity was not found.")
 ```
 
 ## Modifying a document

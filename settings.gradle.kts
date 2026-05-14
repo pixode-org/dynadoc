@@ -8,5 +8,4 @@ include(
     "dynadoc-core",
     "dynadoc-kotlinx-serialization",
     "dynadoc-jackson",
-    "dynadoc-moshi",
 )

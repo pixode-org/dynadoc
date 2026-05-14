@@ -54,5 +54,4 @@ dependencies {
     kover(project(":dynadoc-core"))
     kover(project(":dynadoc-kotlinx-serialization"))
     kover(project(":dynadoc-jackson"))
-    kover(project(":dynadoc-moshi"))
 }
