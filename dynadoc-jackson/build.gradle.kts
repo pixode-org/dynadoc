@@ -8,7 +8,7 @@ dependencies {
     testImplementation(platform("org.junit:junit-bom:5.10.2"))
     testImplementation("org.junit.jupiter:junit-jupiter")
     testImplementation("io.mockk:mockk:1.13.11")
-    testImplementation("org.skyscreamer:jsonassert:1.5.1")
+    testImplementation("org.jetbrains.kotlinx:kotlinx-serialization-json:1.11.0")
 
     testRuntimeOnly("org.junit.platform:junit-platform-launcher")
 }

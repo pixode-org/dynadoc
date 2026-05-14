@@ -6,6 +6,8 @@ import java.io.IOException
 import java.util.stream.Stream
 import kotlin.reflect.KType
 import kotlin.reflect.typeOf
+import kotlin.test.assertNotNull
+import kotlinx.serialization.json.Json.Default.parseToJsonElement
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.assertThrows
@@ -15,32 +17,32 @@ import org.junit.jupiter.params.provider.MethodSource
 import org.junit.jupiter.params.provider.ValueSource
 import org.pixode.dynadoc.core.Document
 import org.pixode.dynadoc.core.DocumentKey
+import org.pixode.dynadoc.core.parseDocument
 import org.pixode.dynadoc.serialization.JacksonSerializerTests.MethodSources.PREFIX
-import org.skyscreamer.jsonassert.JSONAssert
 
 class JacksonSerializerTests {
     @ParameterizedTest
     @MethodSource("$PREFIX#jsonValid")
     fun serialize_valid(json: String, type: KType, value: Any) {
-        val result: String = DefaultJsonSerializer.serialize(value)
+        val result: String = DefaultJsonSerializer.serializeToString(value)
 
-        JSONAssert.assertEquals(json, result, true)
+        assertJsonEquals(json, result)
     }
 
     @Test
     fun serialize_unknownField() {
         val json = """ { "key": "test", "a": 3, "b": "value" } """
-        val value: JsonUnknownFields = DefaultJsonSerializer.deserialize(json, typeOf<JsonUnknownFields>())
+        val value: JsonUnknownFields = DefaultJsonSerializer.deserializeFromString(json, typeOf<JsonUnknownFields>())
 
-        val result: String = DefaultJsonSerializer.serialize(value)
+        val result: String = DefaultJsonSerializer.serializeToString(value)
 
-        JSONAssert.assertEquals(json, result, true)
+        assertJsonEquals(json, result)
     }
 
     @ParameterizedTest
     @MethodSource("$PREFIX#jsonValid")
     fun deserialize_valid(json: String, type: KType, value: Any) {
-        val result: Any = DefaultJsonSerializer.deserialize(json, type)
+        val result: Any = DefaultJsonSerializer.deserializeFromString(json, type)
 
         assertEquals(value, result)
     }
@@ -53,7 +55,8 @@ class JacksonSerializerTests {
         ],
     )
     fun deserialize_null(json: String) {
-        val result: JsonStringNullable = DefaultJsonSerializer.deserialize(json, typeOf<JsonStringNullable>())
+        val result: JsonStringNullable =
+            DefaultJsonSerializer.deserializeFromString(json, typeOf<JsonStringNullable>())
 
         assertEquals(JsonStringNullable(null), result)
     }
@@ -66,7 +69,7 @@ class JacksonSerializerTests {
         ],
     )
     fun deserialize_default(json: String) {
-        val result: JsonStringDefault = DefaultJsonSerializer.deserialize(json, typeOf<JsonStringDefault>())
+        val result: JsonStringDefault = DefaultJsonSerializer.deserializeFromString(json, typeOf<JsonStringDefault>())
 
         assertEquals(JsonStringDefault("default"), result)
     }
@@ -75,7 +78,7 @@ class JacksonSerializerTests {
     @MethodSource("$PREFIX#jsonError")
     fun deserialize_error(json: String, type: KType) {
         assertThrows<IOException> {
-            DefaultJsonSerializer.deserialize(json, type)
+            DefaultJsonSerializer.deserializeFromString(json, type)
         }
     }
 
@@ -89,12 +92,12 @@ class JacksonSerializerTests {
 
         val result: Document = DefaultJsonSerializer.toDocument(document)
 
-        JSONAssert.assertEquals(""" { "key": "value" } """, result.body, true)
+        assertJsonEquals(""" { "key": "value" } """, result.body.toString())
     }
 
     @Test
     fun fromDocument_document() {
-        val document = Document(
+        val document = parseDocument(
             id = DocumentKey("PK", "SK"),
             body = """ { "key": "value" } """,
             version = 1,
@@ -120,7 +123,7 @@ class JacksonSerializerTests {
                     JsonStringValue("value"),
                 ),
                 Arguments.of(
-                    """ { "key": 1234567890.12345 } """,
+                    """ { "key": 1.23456789012345E9 } """,
                     typeOf<JsonNumberValue>(),
                     JsonNumberValue(1234567890.12345),
                 ),
@@ -185,6 +188,11 @@ class JacksonSerializerTests {
                 ),
             )
         }
+    }
+
+    private fun assertJsonEquals(expected: String, actual: String?) {
+        assertNotNull(actual)
+        assertEquals(parseToJsonElement(expected), parseToJsonElement(actual))
     }
 }
 
