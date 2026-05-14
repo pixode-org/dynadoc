@@ -1,10 +1,8 @@
 dependencies {
     api(project(":dynadoc-core"))
-
     api("com.fasterxml.jackson.module:jackson-module-kotlin:[2.15,)")
 
     testImplementation(kotlin("test"))
-
     testImplementation(platform("org.junit:junit-bom:5.10.2"))
     testImplementation("org.junit.jupiter:junit-jupiter")
     testImplementation("io.mockk:mockk:1.13.11")

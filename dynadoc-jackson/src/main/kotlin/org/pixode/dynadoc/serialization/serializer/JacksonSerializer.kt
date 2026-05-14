@@ -1,11 +1,10 @@
-﻿package org.pixode.dynadoc.serialization
+﻿package org.pixode.dynadoc.serialization.serializer
 
 import com.fasterxml.jackson.databind.ObjectMapper
 import com.fasterxml.jackson.module.kotlin.KotlinFeature
 import com.fasterxml.jackson.module.kotlin.jacksonObjectMapper
 import kotlin.reflect.KType
 import kotlin.reflect.jvm.jvmErasure
-import org.pixode.dynadoc.serialization.serializer.StringJsonSerializer
 
 class JacksonSerializer(
     private val objectMapper: ObjectMapper,
@@ -20,7 +19,7 @@ class JacksonSerializer(
 }
 
 
-val DefaultJsonSerializer = JacksonSerializer(
+val JacksonJsonSerializer = JacksonSerializer(
     objectMapper =
         jacksonObjectMapper {
             this.configure(KotlinFeature.StrictNullChecks, true)

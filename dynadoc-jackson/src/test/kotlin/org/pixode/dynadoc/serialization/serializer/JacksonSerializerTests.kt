@@ -1,4 +1,4 @@
-﻿package org.pixode.dynadoc.serialization
+﻿package org.pixode.dynadoc.serialization.serializer
 
 import com.fasterxml.jackson.annotation.JsonAnyGetter
 import com.fasterxml.jackson.annotation.JsonAnySetter
@@ -18,13 +18,16 @@ import org.junit.jupiter.params.provider.ValueSource
 import org.pixode.dynadoc.core.Document
 import org.pixode.dynadoc.core.DocumentKey
 import org.pixode.dynadoc.core.parseDocument
-import org.pixode.dynadoc.serialization.JacksonSerializerTests.MethodSources.PREFIX
+import org.pixode.dynadoc.serialization.JsonEntity
+import org.pixode.dynadoc.serialization.fromDocument
+import org.pixode.dynadoc.serialization.serializer.JacksonSerializerTests.MethodSources.PREFIX
+import org.pixode.dynadoc.serialization.toDocument
 
 class JacksonSerializerTests {
     @ParameterizedTest
     @MethodSource("$PREFIX#jsonValid")
     fun serialize_valid(json: String, type: KType, value: Any) {
-        val result: String = DefaultJsonSerializer.serializeToString(value)
+        val result: String = JacksonJsonSerializer.serializeToString(value)
 
         assertJsonEquals(json, result)
     }
@@ -32,9 +35,9 @@ class JacksonSerializerTests {
     @Test
     fun serialize_unknownField() {
         val json = """ { "key": "test", "a": 3, "b": "value" } """
-        val value: JsonUnknownFields = DefaultJsonSerializer.deserializeFromString(json, typeOf<JsonUnknownFields>())
+        val value: JsonUnknownFields = JacksonJsonSerializer.deserializeFromString(json, typeOf<JsonUnknownFields>())
 
-        val result: String = DefaultJsonSerializer.serializeToString(value)
+        val result: String = JacksonJsonSerializer.serializeToString(value)
 
         assertJsonEquals(json, result)
     }
@@ -42,7 +45,7 @@ class JacksonSerializerTests {
     @ParameterizedTest
     @MethodSource("$PREFIX#jsonValid")
     fun deserialize_valid(json: String, type: KType, value: Any) {
-        val result: Any = DefaultJsonSerializer.deserializeFromString(json, type)
+        val result: Any = JacksonJsonSerializer.deserializeFromString(json, type)
 
         assertEquals(value, result)
     }
@@ -56,7 +59,7 @@ class JacksonSerializerTests {
     )
     fun deserialize_null(json: String) {
         val result: JsonStringNullable =
-            DefaultJsonSerializer.deserializeFromString(json, typeOf<JsonStringNullable>())
+            JacksonJsonSerializer.deserializeFromString(json, typeOf<JsonStringNullable>())
 
         assertEquals(JsonStringNullable(null), result)
     }
@@ -69,7 +72,7 @@ class JacksonSerializerTests {
         ],
     )
     fun deserialize_default(json: String) {
-        val result: JsonStringDefault = DefaultJsonSerializer.deserializeFromString(json, typeOf<JsonStringDefault>())
+        val result: JsonStringDefault = JacksonJsonSerializer.deserializeFromString(json, typeOf<JsonStringDefault>())
 
         assertEquals(JsonStringDefault("default"), result)
     }
@@ -78,19 +81,20 @@ class JacksonSerializerTests {
     @MethodSource("$PREFIX#jsonError")
     fun deserialize_error(json: String, type: KType) {
         assertThrows<IOException> {
-            DefaultJsonSerializer.deserializeFromString(json, type)
+            JacksonJsonSerializer.deserializeFromString(json, type)
         }
     }
 
     @Test
     fun toDocument_document() {
-        val document: JsonEntity<JsonStringValue> = JsonEntity(
-            id = DocumentKey("PK", "SK"),
-            entity = JsonStringValue("value"),
-            version = 1,
-        )
+        val document: JsonEntity<JsonStringValue> =
+            JsonEntity(
+                id = DocumentKey("PK", "SK"),
+                entity = JsonStringValue("value"),
+                version = 1,
+            )
 
-        val result: Document = DefaultJsonSerializer.toDocument(document)
+        val result: Document = JacksonJsonSerializer.toDocument(document)
 
         assertJsonEquals(""" { "key": "value" } """, result.body.toString())
     }
@@ -103,7 +107,7 @@ class JacksonSerializerTests {
             version = 1,
         )
 
-        val result: JsonEntity<JsonStringValue?> = DefaultJsonSerializer.fromDocument(document)
+        val result: JsonEntity<JsonStringValue?> = JacksonJsonSerializer.fromDocument(document)
 
         assertEquals(
             JsonStringValue("value"),
@@ -112,7 +116,8 @@ class JacksonSerializerTests {
     }
 
     object MethodSources {
-        const val PREFIX: String = "org.pixode.dynadoc.serialization.JacksonSerializerTests\$MethodSources"
+        const val PREFIX: String =
+            "org.pixode.dynadoc.serialization.serializer.JacksonSerializerTests\$MethodSources"
 
         @JvmStatic
         fun jsonValid(): Stream<Arguments> {

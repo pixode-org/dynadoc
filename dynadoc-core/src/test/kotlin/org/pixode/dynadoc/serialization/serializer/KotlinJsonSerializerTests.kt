@@ -17,6 +17,7 @@ import org.junit.jupiter.params.provider.MethodSource
 import org.pixode.dynadoc.core.Document
 import org.pixode.dynadoc.core.DocumentKey
 import org.pixode.dynadoc.core.parseDocument
+import org.pixode.dynadoc.serialization.JsonEntity
 import org.pixode.dynadoc.serialization.fromDocument
 import org.pixode.dynadoc.serialization.serializer.KotlinJsonSerializerTests.MethodSources.PREFIX
 import org.pixode.dynadoc.serialization.toDocument
@@ -48,8 +49,8 @@ class KotlinJsonSerializerTests {
 
     @Test
     fun toDocument_document() {
-        val document: org.pixode.dynadoc.serialization.JsonEntity<JsonStringValue> =
-            _root_ide_package_.org.pixode.dynadoc.serialization.JsonEntity(
+        val document: JsonEntity<JsonStringValue> =
+            JsonEntity(
                 id = DocumentKey("PK", "SK"),
                 entity = JsonStringValue("value"),
                 version = 1,
@@ -68,7 +69,7 @@ class KotlinJsonSerializerTests {
             version = 1,
         )
 
-        val result: org.pixode.dynadoc.serialization.JsonEntity<JsonStringValue?> = DefaultJsonSerializer.fromDocument(document)
+        val result: JsonEntity<JsonStringValue?> = DefaultJsonSerializer.fromDocument(document)
 
         assertEquals(
             JsonStringValue("value"),
@@ -77,7 +78,8 @@ class KotlinJsonSerializerTests {
     }
 
     object MethodSources {
-        const val PREFIX: String = "org.pixode.dynadoc.serialization.serializer.KotlinJsonSerializerTests\$MethodSources"
+        const val PREFIX: String =
+            "org.pixode.dynadoc.serialization.serializer.KotlinJsonSerializerTests\$MethodSources"
 
         @JvmStatic
         fun jsonValid(): Stream<Arguments> {
