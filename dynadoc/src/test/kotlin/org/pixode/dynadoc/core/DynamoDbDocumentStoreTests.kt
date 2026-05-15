@@ -205,6 +205,17 @@ class DynamoDbDocumentStoreTests {
     }
 
     @Test
+    fun updateDocuments_singleDocumentGenericError() = runBlocking {
+        assertThrows<DynamoDbException> {
+            updateDocument(ids[0], JSON_1MB, 0)
+        }
+
+        val document = store.getDocument(ids[0])
+
+        assertDocument(document, ids[0], null, 0)
+    }
+
+    @Test
     fun updateDocuments_multipleDocumentsSuccess() = runBlocking {
         updateDocument(ids[0], JSON_1, 0)
         updateDocument(ids[1], JSON_2, 0)
