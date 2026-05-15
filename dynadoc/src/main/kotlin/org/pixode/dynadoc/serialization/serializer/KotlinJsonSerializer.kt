@@ -21,7 +21,7 @@ class KotlinJsonSerializer(
     override fun <T : Any> deserialize(json: JsonElement, type: KType): T =
         kotlinJson.decodeFromJsonElement(
             deserializer = serializer(type) as KSerializer<T>,
-            element = json
+            element = json,
         )
 }
 

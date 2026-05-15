@@ -95,8 +95,4 @@ class AttributeMapper(
         is AttributeValue.M -> JsonObject(value.value.mapValues { (_, v) -> attributeValueToJson(v) })
         else -> throw UnsupportedOperationException("Unsupported attribute type: ${value.javaClass.simpleName}")
     }
-
-    private companion object {
-        private val jsonObject: Regex = Regex("^\\s*\\{")
-    }
 }

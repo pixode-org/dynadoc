@@ -1,6 +1,6 @@
 # Dynadoc
 
-<a href="https://central.sonatype.com/artifact/org.pixode/dynadoc-core">![Maven Central Version](https://img.shields.io/maven-central/v/org.pixode/dynadoc-core)</a>
+<a href="https://central.sonatype.com/artifact/org.pixode/dynadoc">![Maven Central Version](https://img.shields.io/maven-central/v/org.pixode/dynadoc)</a>
 
 Dynadoc is a Kotlin library for using DynamoDB as a JSON document store. It manages the mapping between Kotlin objects and JSON documents.
 
@@ -50,10 +50,15 @@ data class DocumentKey(
 
 ### Packages
 
-The following dependencies should be added to the project:
+A dependency to [dynadoc](https://central.sonatype.com/artifact/org.pixode/dynadoc) should be added to the project:
 
-- [dynadoc-core](https://central.sonatype.com/artifact/org.pixode/dynadoc-core): The core library, responsible for storing and retrieving JSON documents in DynamoDB.
-- [dynadoc-kotlinx-serialization](https://central.sonatype.com/artifact/org.pixode/dynadoc-kotlinx-serialization): The library in charge of serializing and deserializing JSON into Kotlin objects. This library relies internally on the `kotlinx-serialization-json` library to handle JSON serialization.
+```kotlin
+dependencies {
+    implementation("org.pixode:dynadoc:VERSION")
+}
+```
+
+**Note:** The [dynadoc-jackson](https://central.sonatype.com/artifact/org.pixode/dynadoc-jackson) library is also provided to allow using Jackson as the JSON serializer instead of kotlinx.serialization. It is not required to use the core library, and can be added as an optional dependency.
 
 ### Initialization
 
@@ -84,7 +89,7 @@ When using a dependency injection framework such as Guice, a factory function su
 @Singleton
 fun entityStore(awsCredentialsProvider: CredentialsProvider): EntityStore {
     val client = DynamoDbClient {
-        credentialsProvider = CredentialsProvider
+        credentialsProvider = awsCredentialsProvider
     }
 
     val documentStore = DynamoDbDocumentStore(client, "tablename")
@@ -144,12 +149,12 @@ The simplest way to retrieve a document is by using its ID, with the `getEntity`
 
 ```kotlin
 // The ID of the document is already known
-val id: DocumentKey
+val key: DocumentKey
 
 val entity: JsonEntity<Product?> = entityStore.getEntity(key)
 ```
 
-If the document does not exist, this method will return a "shadow" `JsonEntity<T>` object which has a null body and a version number of `0`. It is possible to update this "shadow" document the same way a normal document can be updated, which will result in the document being effectively created in the table.
+If the document does not exist, this method will return a "shadow" `JsonEntity<T>` object with a `null` body and a version number of `0`. It is possible to update this "shadow" document the same way a normal document can be updated, which will result in the document being effectively created in the table.
 
 It is possible to ensure the document exists by using the `ifExists` function.
 
@@ -177,7 +182,7 @@ Dynadoc will always make sure no update has been made to the document between th
 
 ## Deleting a document
 
-To delete a document, simply set it to null.
+To delete a document, simply set it to `null`.
 
 ```kotlin
 val modifiedEntity = entity.modify { null }

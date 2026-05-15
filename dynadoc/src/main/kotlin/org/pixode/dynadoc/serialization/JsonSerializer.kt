@@ -2,7 +2,6 @@
 
 import kotlin.reflect.KType
 import kotlin.reflect.typeOf
-import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonElement
 import org.pixode.dynadoc.core.Document
 

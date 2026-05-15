@@ -14,7 +14,7 @@ private val nonNullDocument = Document(
             JsonObject(mapOf("a" to JsonPrimitive(1))),
             JsonNull,
             JsonPrimitive("value"),
-        )
+        ),
     ),
     version = 2L,
 )
@@ -25,7 +25,7 @@ class DocumentTests {
     fun toString_nonNullBody() {
         assertEquals(
             """Document(id=("PK", "SK"), body=[{"a":1},null,"value"], version=2)""",
-            nonNullDocument.toString()
+            nonNullDocument.toString(),
         )
     }
 
@@ -33,7 +33,7 @@ class DocumentTests {
     fun toString_nullBody() {
         assertEquals(
             """Document(id=("PK", "SK"), body=null, version=3)""",
-            nullDocument.toString()
+            nullDocument.toString(),
         )
     }
 
