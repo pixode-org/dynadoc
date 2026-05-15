@@ -54,15 +54,13 @@ class TransactionTests {
 
     @Test
     fun transaction_exception() = runBlocking {
-        assertThrows<ArithmeticException>(
-            fun() = runBlocking {
-                store.transaction {
-                    check(JsonEntity(ids[0], "abc", 1))
-                    modify(JsonEntity(ids[1], "abc", 2))
-                    throw ArithmeticException()
-                }
-            },
-        )
+        assertThrows<ArithmeticException> {
+            store.transaction {
+                check(JsonEntity(ids[0], "abc", 1))
+                modify(JsonEntity(ids[1], "abc", 2))
+                throw ArithmeticException()
+            }
+        }
 
         coVerify(exactly = 0) {
             documentStore.updateDocuments(any(), any())
@@ -75,14 +73,12 @@ class TransactionTests {
             documentStore.updateDocuments(any(), any())
         } throws UpdateConflictException(ids[0])
 
-        assertThrows<UpdateConflictException>(
-            fun() = runBlocking {
-                store.transaction(NO_RETRY) {
-                    check(JsonEntity(ids[0], "abc", 1))
-                    modify(JsonEntity(ids[1], "abc", 2))
-                }
-            },
-        )
+        assertThrows<UpdateConflictException> {
+            store.transaction(NO_RETRY) {
+                check(JsonEntity(ids[0], "abc", 1))
+                modify(JsonEntity(ids[1], "abc", 2))
+            }
+        }
 
         documentStore.assertUpdateDocuments(
             updated = listOf(Document(ids[1], TestSerializer.jsonFor("abc"), 2)),
@@ -97,14 +93,12 @@ class TransactionTests {
             documentStore.updateDocuments(any(), any())
         } throws UpdateConflictException(ids[0])
 
-        assertThrows<UpdateConflictException>(
-            fun() = runBlocking {
-                store.transaction(retry(maxRetries = retries)) {
-                    check(JsonEntity(ids[0], "abc", 1))
-                    modify(JsonEntity(ids[1], "abc", 2))
-                }
-            },
-        )
+        assertThrows<UpdateConflictException> {
+            store.transaction(retry(maxRetries = retries)) {
+                check(JsonEntity(ids[0], "abc", 1))
+                modify(JsonEntity(ids[1], "abc", 2))
+            }
+        }
 
         documentStore.assertUpdateDocuments(
             exactly = retries + 1,
@@ -119,14 +113,12 @@ class TransactionTests {
             documentStore.updateDocuments(any(), any())
         } throws IllegalArgumentException()
 
-        assertThrows<IllegalArgumentException>(
-            fun() = runBlocking {
-                store.transaction(retry(maxRetries = 3)) {
-                    check(JsonEntity(ids[0], "abc", 1))
-                    modify(JsonEntity(ids[1], "abc", 2))
-                }
-            },
-        )
+        assertThrows<IllegalArgumentException> {
+            store.transaction(retry(maxRetries = 3)) {
+                check(JsonEntity(ids[0], "abc", 1))
+                modify(JsonEntity(ids[1], "abc", 2))
+            }
+        }
 
         documentStore.assertUpdateDocuments(
             updated = listOf(Document(ids[1], TestSerializer.jsonFor("abc"), 2)),

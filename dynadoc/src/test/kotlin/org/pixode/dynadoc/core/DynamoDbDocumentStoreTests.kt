@@ -181,7 +181,7 @@ class DynamoDbDocumentStoreTests {
 
         val document = store.getDocument(ids[0])
 
-        assertDocument(document, ids[0], JSON_1, 1);
+        assertDocument(document, ids[0], JSON_1, 1)
         assertEquals(ids[0], exception.id)
     }
 
@@ -200,7 +200,7 @@ class DynamoDbDocumentStoreTests {
 
         val document = store.getDocument(ids[0])
 
-        assertDocument(document, ids[0], JSON_1, 1);
+        assertDocument(document, ids[0], JSON_1, 1)
         assertEquals(ids[0], exception.id)
     }
 
@@ -449,7 +449,7 @@ class DynamoDbDocumentStoreTests {
     //endregion MethodSources
 
     object MethodSources {
-        const val PREFIX: String = "org.pixode.dynadoc.core.DynamoDbDocumentStoreTests\$MethodSources"
+        const val PREFIX: String = $$"org.pixode.dynadoc.core.DynamoDbDocumentStoreTests$MethodSources"
 
         @JvmStatic
         fun updateDocuments_oneArgument(): Stream<String?> {

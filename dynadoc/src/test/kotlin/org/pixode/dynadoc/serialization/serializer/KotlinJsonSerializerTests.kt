@@ -79,7 +79,7 @@ class KotlinJsonSerializerTests {
 
     object MethodSources {
         const val PREFIX: String =
-            "org.pixode.dynadoc.serialization.serializer.KotlinJsonSerializerTests\$MethodSources"
+            $$"org.pixode.dynadoc.serialization.serializer.KotlinJsonSerializerTests$MethodSources"
 
         @JvmStatic
         fun jsonValid(): Stream<Arguments> {
@@ -165,8 +165,12 @@ class KotlinJsonSerializerTests {
         }
     }
 
+    //region Helper Methods
+
     private fun assertJsonEquals(expected: String, actual: JsonElement?) =
         assertEquals(parseToJsonElement(expected), actual)
+
+    //endregion
 }
 
 @Serializable

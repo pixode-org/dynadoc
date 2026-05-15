@@ -117,7 +117,7 @@ class JacksonSerializerTests {
 
     object MethodSources {
         const val PREFIX: String =
-            "org.pixode.dynadoc.serialization.serializer.JacksonSerializerTests\$MethodSources"
+            $$"org.pixode.dynadoc.serialization.serializer.JacksonSerializerTests$MethodSources"
 
         @JvmStatic
         fun jsonValid(): Stream<Arguments> {
@@ -195,10 +195,14 @@ class JacksonSerializerTests {
         }
     }
 
+    //region Helper Methods
+
     private fun assertJsonEquals(expected: String, actual: String?) {
         assertNotNull(actual)
         assertEquals(parseToJsonElement(expected), parseToJsonElement(actual))
     }
+
+    //endregion
 }
 
 private data class JsonStringValue(val key: String)
