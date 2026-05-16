@@ -123,25 +123,12 @@ class DynamoDbDocumentStoreTests {
             """ { "a":1, "$SORT_KEY":2 } """,
             """ { "a":1, "$VERSION":2 } """,
             """ { "a":1, "$DELETED":2 } """,
-            """ } { """,
             """ a """,
-            """ { """,
         ],
     )
     fun updateDocuments_invalidJson(to: String) = runBlocking {
         assertThrows<IllegalArgumentException> {
             updateDocument(to, 0)
-        }
-
-        val document = store.getDocument(ids[0])
-
-        assertDocument(document, ids[0], null, 0)
-    }
-
-    @Test
-    fun updateDocuments_genericError() = runBlocking {
-        assertThrows<DynamoDbException> {
-            updateDocument(JSON_1MB, 0)
         }
 
         val document = store.getDocument(ids[0])
@@ -205,9 +192,9 @@ class DynamoDbDocumentStoreTests {
     }
 
     @Test
-    fun updateDocuments_singleDocumentGenericError() = runBlocking {
+    fun updateDocuments_singleDocumentDynamoDbError() = runBlocking {
         assertThrows<DynamoDbException> {
-            updateDocument(ids[0], JSON_1MB, 0)
+            updateDocument(JSON_1MB, 0)
         }
 
         val document = store.getDocument(ids[0])
@@ -270,7 +257,7 @@ class DynamoDbDocumentStoreTests {
     }
 
     @Test
-    fun updateDocuments_multipleDocumentsGenericError() = runBlocking {
+    fun updateDocuments_multipleDocumentsDynamoDbError() = runBlocking {
         updateDocument(ids[0], JSON_1, 0)
 
         assertThrows<DynamoDbException> {

@@ -1,11 +1,15 @@
 ﻿package org.pixode.dynadoc.core
 
+import kotlinx.serialization.SerializationException
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonNull
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Test
+import org.junit.jupiter.api.assertThrows
+import org.junit.jupiter.params.ParameterizedTest
+import org.junit.jupiter.params.provider.ValueSource
 
 private val nonNullDocument = Document(
     id = DocumentKey("PK", "SK"),
@@ -57,5 +61,23 @@ class DocumentTests {
         )
 
         assertEquals(nullDocument, result)
+    }
+
+    @ParameterizedTest
+    @ValueSource(
+        strings = [
+            """ } { """,
+            """ [ """,
+            """ "k """,
+        ],
+    )
+    fun parseDocument_invalidBody(body: String) {
+        assertThrows<SerializationException> {
+            parseDocument(
+                id = DocumentKey("PK", "SK"),
+                body = body,
+                version = 3L,
+            )
+        }
     }
 }
