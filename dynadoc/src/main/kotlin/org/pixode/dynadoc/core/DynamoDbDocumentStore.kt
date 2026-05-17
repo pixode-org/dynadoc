@@ -187,41 +187,47 @@ class DynamoDbDocumentStore(
     //endregion
 
     fun query(queryRequest: QueryRequest.Builder.() -> Unit): Flow<Document> = flow {
+        val request = QueryRequest {
+            tableName = this@DynamoDbDocumentStore.tableName
+            queryRequest()
+        }
+
         var startKey: Map<String, AttributeValue>? = null
-        while (true) {
-            val currentStartKey = startKey
-            val response = client.query {
-                tableName = this@DynamoDbDocumentStore.tableName
-                queryRequest()
-                if (currentStartKey != null) {
-                    exclusiveStartKey = currentStartKey
+        do {
+            val request = request.copy {
+                if (startKey != null) {
+                    exclusiveStartKey = startKey
                 }
             }
+            val response = client.query(request)
             for (item in response.items ?: emptyList()) {
                 emit(attributeMapper.toDocument(item))
             }
+
             startKey = response.lastEvaluatedKey?.takeIf { it.isNotEmpty() }
-            if (startKey == null) break
-        }
+        } while (startKey != null)
     }
 
     fun scan(scanRequest: ScanRequest.Builder.() -> Unit): Flow<Document> = flow {
+        val request = ScanRequest {
+            tableName = this@DynamoDbDocumentStore.tableName
+            scanRequest()
+        }
+
         var startKey: Map<String, AttributeValue>? = null
-        while (true) {
-            val currentStartKey = startKey
-            val response = client.scan {
-                tableName = this@DynamoDbDocumentStore.tableName
-                scanRequest()
-                if (currentStartKey != null) {
-                    exclusiveStartKey = currentStartKey
+        do {
+            val request = request.copy {
+                if (startKey != null) {
+                    exclusiveStartKey = startKey
                 }
             }
+            val response = client.scan(request)
             for (item in response.items ?: emptyList()) {
                 emit(attributeMapper.toDocument(item))
             }
+
             startKey = response.lastEvaluatedKey?.takeIf { it.isNotEmpty() }
-            if (startKey == null) break
-        }
+        } while (startKey != null)
     }
 
     suspend fun createTable(configure: CreateTableRequest.Builder.() -> Unit = { }) {

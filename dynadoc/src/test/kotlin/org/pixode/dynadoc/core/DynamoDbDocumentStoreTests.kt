@@ -330,15 +330,14 @@ class DynamoDbDocumentStoreTests {
         }
         store.updateDocuments(*documents.toTypedArray())
 
-        val result =
-            store.query {
-                keyConditionExpression = "partition_key = :pk AND sort_key BETWEEN :start AND :end"
-                expressionAttributeValues = mapOf(
-                    ":pk" to AttributeValue.S(partitionKey),
-                    ":start" to AttributeValue.S("ABC03"),
-                    ":end" to AttributeValue.S("ABC05"),
-                )
-            }.toList()
+        val result = store.query {
+            keyConditionExpression = "partition_key = :pk AND sort_key BETWEEN :start AND :end"
+            expressionAttributeValues = mapOf(
+                ":pk" to AttributeValue.S(partitionKey),
+                ":start" to AttributeValue.S("ABC03"),
+                ":end" to AttributeValue.S("ABC05"),
+            )
+        }.toList()
 
         assertDocuments(result, documents.slice(3..5))
     }
@@ -350,15 +349,14 @@ class DynamoDbDocumentStoreTests {
         }
         store.updateDocuments(*documents.toTypedArray())
 
-        val result =
-            store.query {
-                keyConditionExpression = "partition_key = :pk"
-                filterExpression = "a > :start"
-                expressionAttributeValues = mapOf(
-                    ":pk" to AttributeValue.S(partitionKey),
-                    ":start" to AttributeValue.N("4"),
-                )
-            }.toList()
+        val result = store.query {
+            keyConditionExpression = "partition_key = :pk"
+            filterExpression = "a > :start"
+            expressionAttributeValues = mapOf(
+                ":pk" to AttributeValue.S(partitionKey),
+                ":start" to AttributeValue.N("4"),
+            )
+        }.toList()
 
         assertDocuments(result, documents.slice(5..9))
     }
@@ -370,15 +368,14 @@ class DynamoDbDocumentStoreTests {
         }
         documents.forEach { document -> store.updateDocuments(document) }
 
-        val result =
-            store.query {
-                keyConditionExpression = "partition_key = :pk AND sort_key BETWEEN :start AND :end"
-                expressionAttributeValues = mapOf(
-                    ":pk" to AttributeValue.S(partitionKey),
-                    ":start" to AttributeValue.S("ABC0120"),
-                    ":end" to AttributeValue.S("ABC0180"),
-                )
-            }.toList()
+        val result = store.query {
+            keyConditionExpression = "partition_key = :pk AND sort_key BETWEEN :start AND :end"
+            expressionAttributeValues = mapOf(
+                ":pk" to AttributeValue.S(partitionKey),
+                ":start" to AttributeValue.S("ABC0120"),
+                ":end" to AttributeValue.S("ABC0180"),
+            )
+        }.toList()
 
         assertDocuments(result, documents.slice(20..80))
     }
@@ -398,14 +395,13 @@ class DynamoDbDocumentStoreTests {
         }
         store.updateDocuments(*documents.toTypedArray())
 
-        val result =
-            store.scan {
-                filterExpression = "b BETWEEN :start AND :end"
-                expressionAttributeValues = mapOf(
-                    ":start" to AttributeValue.S("val"),
-                    ":end" to AttributeValue.S("value 4"),
-                )
-            }.toList()
+        val result = store.scan {
+            filterExpression = "b BETWEEN :start AND :end"
+            expressionAttributeValues = mapOf(
+                ":start" to AttributeValue.S("val"),
+                ":end" to AttributeValue.S("value 4"),
+            )
+        }.toList()
 
         assertDocuments(result.sortedBy { it.id.partitionKey }, documents.slice(0..4))
     }
@@ -421,14 +417,13 @@ class DynamoDbDocumentStoreTests {
         }
         documents.forEach { document -> store.updateDocuments(document) }
 
-        val result =
-            store.scan {
-                filterExpression = "partition_key BETWEEN :start AND :end"
-                expressionAttributeValues = mapOf(
-                    ":start" to AttributeValue.S("${partitionKey}_120"),
-                    ":end" to AttributeValue.S("${partitionKey}_180"),
-                )
-            }.toList()
+        val result = store.scan {
+            filterExpression = "partition_key BETWEEN :start AND :end"
+            expressionAttributeValues = mapOf(
+                ":start" to AttributeValue.S("${partitionKey}_120"),
+                ":end" to AttributeValue.S("${partitionKey}_180"),
+            )
+        }.toList()
 
         assertDocuments(result.sortedBy { it.id.partitionKey }, documents.slice(20..80))
     }
