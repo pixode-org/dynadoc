@@ -20,8 +20,6 @@ import aws.sdk.kotlin.services.dynamodb.model.ScanRequest
 import aws.sdk.kotlin.services.dynamodb.model.TransactWriteItem
 import aws.sdk.kotlin.services.dynamodb.model.TransactionCanceledException
 import aws.sdk.kotlin.services.dynamodb.putItem
-import aws.sdk.kotlin.services.dynamodb.query
-import aws.sdk.kotlin.services.dynamodb.scan
 import aws.sdk.kotlin.services.dynamodb.transactWriteItems
 import java.time.Clock
 import java.time.Duration

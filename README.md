@@ -2,7 +2,7 @@
 
 <a href="https://central.sonatype.com/artifact/org.pixode/dynadoc">![Maven Central Version](https://img.shields.io/maven-central/v/org.pixode/dynadoc)</a>
 
-Dynadoc is a Kotlin library for using DynamoDB as a JSON document store. It manages the mapping between Kotlin objects and JSON documents.
+Dynadoc is a Kotlin library for using DynamoDB or MongoDB as a JSON document store. It manages the mapping between Kotlin objects and JSON documents.
 
 ## Concepts
 
@@ -16,6 +16,16 @@ It also adds a few special attributes that don't appear in the JSON, but appear 
 - `sort_key`: The sort key of the DynamoDB table.
 - `version`: An integer representing the version of the item, for optimistic concurrency management purposes.
 - `deleted`: An attribute set on deleted objects. It contains a value that can be used with the TTL feature of DynamoDB to clear soft-deleted items from the table.
+
+### MongoDB mapping
+
+With MongoDB, top-level keys of the JSON document become fields of the MongoDB document, and the following reserved fields are added:
+
+- `_id`: An embedded document of the form `{ partition_key, clustering_key }`, where `clustering_key` holds the sort key.
+- `_version`: An integer representing the version of the document, for optimistic concurrency management purposes.
+- `_deleted`: A date set on deleted documents, used by a TTL index to clear soft-deleted documents from the collection.
+
+These field names cannot be used in document bodies.
 
 ### The `JsonEntity<T>` type
 
@@ -59,6 +69,8 @@ dependencies {
 ```
 
 The core `dynadoc` library does not depend on the AWS SDK. `DynamoDbDocumentStore` is in the `org.pixode.dynadoc.dynamodb` package.
+
+To use MongoDB instead, add a dependency to [dynadoc-mongodb](https://central.sonatype.com/artifact/org.pixode/dynadoc-mongodb), which references the MongoDB Kotlin coroutine driver. `MongoDbDocumentStore` is in the `org.pixode.dynadoc.mongodb` package. See [Using MongoDB](#using-mongodb).
 
 **Note:** The [dynadoc-jackson](https://central.sonatype.com/artifact/org.pixode/dynadoc-jackson) library is also provided to allow using Jackson as the JSON serializer instead of kotlinx.serialization. It is not required to use the core library, and can be added as an optional dependency.
 
@@ -246,6 +258,44 @@ val retryPolicy: RetryPolicy = retry(maxRetries = 3, pause = Duration.ofSeconds(
 store.transaction(retryPolicy) {
     // Transaction code
 }
+```
+
+## Using MongoDB
+
+`MongoDbDocumentStore` implements the same `DocumentStore` interface as `DynamoDbDocumentStore`, so it can be used with `EntityStore` in the same way.
+
+```kotlin
+val client: MongoClient = MongoClient.create("mongodb://localhost:27017/?replicaSet=rs0")
+
+val documentStore = MongoDbDocumentStore(client, "database", "collection")
+
+// Create the collection, the key index and the TTL index for deleted documents
+documentStore.createCollection()
+
+// On a sharded cluster, shard the collection using the partition key as the shard key
+documentStore.shardCollection()
+
+val entityStore = EntityStore(documentStore, DefaultJsonSerializer)
+```
+
+Updating a single document works with any deployment. Updating multiple documents atomically (for example with `EntityStore.transaction`) relies on MongoDB transactions, which require a replica set or a sharded cluster.
+
+Read concern and read preference are configured on the `MongoClient`.
+
+Custom queries can be performed using the `find` method:
+
+```kotlin
+val result = documentStore.find(
+    Filters.and(
+        Filters.eq("_id.partition_key", "products"),
+        Filters.gte("price", 100),
+        Filters.lte("price", 250),
+    ),
+) {
+    sort(Sorts.ascending("_id.clustering_key"))
+}
+
+val entities: Flow<JsonEntity<Product?>> = result.map(DefaultJsonSerializer::fromDocument)
 ```
 
 ## License
