@@ -1,4 +1,4 @@
-﻿package org.pixode.dynadoc.core
+﻿package org.pixode.dynadoc.dynamodb
 
 import aws.sdk.kotlin.runtime.auth.credentials.StaticCredentialsProvider
 import aws.sdk.kotlin.services.dynamodb.DynamoDbClient
@@ -19,8 +19,13 @@ import org.junit.jupiter.params.ParameterizedTest
 import org.junit.jupiter.params.provider.Arguments
 import org.junit.jupiter.params.provider.MethodSource
 import org.junit.jupiter.params.provider.ValueSource
-import org.pixode.dynadoc.assertDocument
-import org.pixode.dynadoc.core.DynamoDbDocumentStoreTests.MethodSources.PREFIX
+import org.pixode.dynadoc.core.Document
+import org.pixode.dynadoc.core.DocumentKey
+import org.pixode.dynadoc.core.UpdateConflictException
+import org.pixode.dynadoc.core.getDocument
+import org.pixode.dynadoc.core.parseDocument
+import org.pixode.dynadoc.core.updateDocuments
+import org.pixode.dynadoc.dynamodb.DynamoDbDocumentStoreTests.MethodSources.PREFIX
 import org.testcontainers.containers.GenericContainer
 import org.testcontainers.containers.wait.strategy.Wait
 import org.testcontainers.junit.jupiter.Container
@@ -431,7 +436,7 @@ class DynamoDbDocumentStoreTests {
     //endregion MethodSources
 
     object MethodSources {
-        const val PREFIX: String = $$"org.pixode.dynadoc.core.DynamoDbDocumentStoreTests$MethodSources"
+        const val PREFIX: String = $$"org.pixode.dynadoc.dynamodb.DynamoDbDocumentStoreTests$MethodSources"
 
         @JvmStatic
         fun updateDocuments_oneArgument(): Stream<String?> {

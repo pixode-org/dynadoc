@@ -1,4 +1,4 @@
-﻿package org.pixode.dynadoc.core
+﻿package org.pixode.dynadoc.dynamodb
 
 import aws.sdk.kotlin.services.dynamodb.model.AttributeValue
 import java.time.Clock
@@ -11,7 +11,9 @@ import org.junit.jupiter.api.assertThrows
 import org.junit.jupiter.params.ParameterizedTest
 import org.junit.jupiter.params.provider.CsvSource
 import org.junit.jupiter.params.provider.ValueSource
-import org.pixode.dynadoc.assertDocument
+import org.pixode.dynadoc.core.Document
+import org.pixode.dynadoc.core.DocumentKey
+import org.pixode.dynadoc.core.parseDocument
 
 private val id: DocumentKey = DocumentKey("PK", "SK")
 

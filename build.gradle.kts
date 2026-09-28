@@ -47,4 +47,5 @@ repositories {
 dependencies {
     kover(project(":dynadoc"))
     kover(project(":dynadoc-jackson"))
+    kover(project(":dynadoc-dynamodb"))
 }

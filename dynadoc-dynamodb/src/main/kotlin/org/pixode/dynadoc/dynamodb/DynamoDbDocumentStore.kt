@@ -1,4 +1,4 @@
-﻿package org.pixode.dynadoc.core
+﻿package org.pixode.dynadoc.dynamodb
 
 import aws.sdk.kotlin.services.dynamodb.DynamoDbClient
 import aws.sdk.kotlin.services.dynamodb.batchGetItem
@@ -29,6 +29,10 @@ import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.asFlow
 import kotlinx.coroutines.flow.emptyFlow
 import kotlinx.coroutines.flow.flow
+import org.pixode.dynadoc.core.Document
+import org.pixode.dynadoc.core.DocumentKey
+import org.pixode.dynadoc.core.DocumentStore
+import org.pixode.dynadoc.core.UpdateConflictException
 
 /**
  * Represents an implementation of the [DocumentStore] interface that relies on DynamoDB for persistence.

@@ -50,13 +50,15 @@ data class DocumentKey(
 
 ### Packages
 
-A dependency to [dynadoc](https://central.sonatype.com/artifact/org.pixode/dynadoc) should be added to the project:
+A dependency to [dynadoc-dynamodb](https://central.sonatype.com/artifact/org.pixode/dynadoc-dynamodb) should be added to the project. It transitively references the core [dynadoc](https://central.sonatype.com/artifact/org.pixode/dynadoc) library and the AWS SDK for DynamoDB:
 
 ```kotlin
 dependencies {
-    implementation("org.pixode:dynadoc:VERSION")
+    implementation("org.pixode:dynadoc-dynamodb:VERSION")
 }
 ```
+
+The core `dynadoc` library does not depend on the AWS SDK. `DynamoDbDocumentStore` is in the `org.pixode.dynadoc.dynamodb` package.
 
 **Note:** The [dynadoc-jackson](https://central.sonatype.com/artifact/org.pixode/dynadoc-jackson) library is also provided to allow using Jackson as the JSON serializer instead of kotlinx.serialization. It is not required to use the core library, and can be added as an optional dependency.
 

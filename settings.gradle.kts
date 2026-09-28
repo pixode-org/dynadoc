@@ -7,4 +7,5 @@ rootProject.name = "dynadoc"
 include(
     "dynadoc",
     "dynadoc-jackson",
+    "dynadoc-dynamodb",
 )

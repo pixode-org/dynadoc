@@ -1,4 +1,4 @@
-﻿package org.pixode.dynadoc.core
+﻿package org.pixode.dynadoc.dynamodb
 
 import aws.sdk.kotlin.services.dynamodb.model.AttributeValue
 import java.math.BigDecimal
@@ -12,6 +12,8 @@ import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.boolean
 import kotlinx.serialization.json.booleanOrNull
+import org.pixode.dynadoc.core.Document
+import org.pixode.dynadoc.core.DocumentKey
 
 const val PARTITION_KEY = "partition_key"
 const val SORT_KEY = "sort_key"
@@ -41,12 +43,13 @@ class AttributeMapper(
     }
 
     fun fromDocument(document: Document): Map<String, AttributeValue> = buildMap {
-        if (document.body != null) {
-            require(document.body is JsonObject) {
+        val body: JsonElement? = document.body
+        if (body != null) {
+            require(body is JsonObject) {
                 "The document must be a valid JSON object"
             }
 
-            val attributes: Map<String, AttributeValue> = document.body.mapValues { (_, v) ->
+            val attributes: Map<String, AttributeValue> = body.mapValues { (_, v) ->
                 jsonElementToAttributeValue(v)
             }
 
@@ -61,7 +64,7 @@ class AttributeMapper(
         putAll(fromDocumentKey(document.id))
         put(VERSION, AttributeValue.N((document.version + 1).toString()))
 
-        if (document.body == null) {
+        if (body == null) {
             val expiration: Instant = clock.instant() + expiration
             put(DELETED, AttributeValue.N(expiration.epochSecond.toString()))
         }
