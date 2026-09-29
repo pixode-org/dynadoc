@@ -1,12 +1,18 @@
 package org.pixode.dynadoc.mongodb
 
+import com.mongodb.ClientBulkWriteException
 import com.mongodb.MongoException
+import com.mongodb.MongoNamespace
+import com.mongodb.WriteError
 import com.mongodb.client.model.Filters
 import com.mongodb.client.model.IndexOptions
 import com.mongodb.client.model.Indexes
 import com.mongodb.client.model.Updates
+import com.mongodb.client.model.bulk.ClientBulkWriteOptions
+import com.mongodb.client.model.bulk.ClientBulkWriteResult
+import com.mongodb.client.model.bulk.ClientNamespacedWriteModel
+import com.mongodb.client.model.bulk.ClientUpdateResult
 import com.mongodb.client.result.UpdateResult
-import com.mongodb.kotlin.client.coroutine.ClientSession
 import com.mongodb.kotlin.client.coroutine.FindFlow
 import com.mongodb.kotlin.client.coroutine.MongoClient
 import com.mongodb.kotlin.client.coroutine.MongoCollection
@@ -38,7 +44,7 @@ private const val WRITE_CONFLICT_ERROR = 112
  *
  * Documents are stored with an `_id` of the form `{ partition_key, local_key }`, and a `_version` field.
  * Updating multiple documents atomically relies on MongoDB transactions, which require a replica set or a sharded
- * cluster.
+ * cluster, and on client bulk writes, which require MongoDB 8.0 or later.
  */
 class MongoDbDocumentStore(
     private val client: MongoClient,
@@ -52,6 +58,10 @@ class MongoDbDocumentStore(
     private val database: MongoDatabase = client.getDatabase(databaseName)
     private val collection: MongoCollection<BsonDocument> =
         database.getCollection(collectionName, BsonDocument::class.java)
+    private val namespace: MongoNamespace = MongoNamespace(databaseName, collectionName)
+    private val bulkWriteOptions: ClientBulkWriteOptions = ClientBulkWriteOptions.clientBulkWriteOptions()
+        .ordered(true)
+        .verboseResults(true)
 
     //region updateDocuments
 
@@ -61,28 +71,19 @@ class MongoDbDocumentStore(
 
         when {
             updatedList.isEmpty() && checkedList.isEmpty() -> {}
-            updatedList.size == 1 && checkedList.isEmpty() -> updateSingleDocument(null, updatedList[0])
+            updatedList.size == 1 && checkedList.isEmpty() -> updateSingleDocument(updatedList[0])
             else -> updateMultipleDocuments(updatedList, checkedList)
         }
     }
 
-    private suspend fun updateSingleDocument(session: ClientSession?, document: Document) {
+    private suspend fun updateSingleDocument(document: Document) {
         val bson: BsonDocument = bsonMapper.fromDocument(document)
 
         detectConflict(document.id) {
             if (document.version == 0L) {
-                if (session == null) {
-                    collection.insertOne(bson)
-                } else {
-                    collection.insertOne(session, bson)
-                }
+                collection.insertOne(bson)
             } else {
-                val filter: Bson = versionFilter(document.id, document.version)
-                val result: UpdateResult = if (session == null) {
-                    collection.replaceOne(filter, bson)
-                } else {
-                    collection.replaceOne(session, filter, bson)
-                }
+                val result: UpdateResult = collection.replaceOne(versionFilter(document.id, document.version), bson)
 
                 if (result.matchedCount == 0L) {
                     throw UpdateConflictException(document.id)
@@ -92,19 +93,28 @@ class MongoDbDocumentStore(
     }
 
     private suspend fun updateMultipleDocuments(updatedDocuments: List<Document>, checkedDocuments: List<Document>) {
-        // Validate every document before starting the transaction
-        updatedDocuments.forEach(bsonMapper::fromDocument)
+        // Building the operations validates every document before starting the transaction
+        val operations: List<WriteOperation> =
+            updatedDocuments.map(::updateOperation) + checkedDocuments.flatMap(::checkOperations)
 
         client.startSession().use { session ->
             session.startTransaction()
 
             try {
-                for (document in updatedDocuments) {
-                    updateSingleDocument(session, document)
+                // Send all the operations in a single round trip
+                val result: ClientBulkWriteResult = detectBulkConflict(operations) {
+                    client.bulkWrite(session, operations.map { it.model }, bulkWriteOptions)
                 }
 
-                for (document in checkedDocuments) {
-                    checkDocument(session, document)
+                val updateResults: Map<Int, ClientUpdateResult> = result.verboseResults.get().updateResults
+                val conflict: WriteOperation? = operations.withIndex()
+                    .firstOrNull { (index, operation) ->
+                        operation.mustMatch && updateResults.getValue(index).matchedCount == 0L
+                    }
+                    ?.value
+
+                if (conflict != null) {
+                    throw UpdateConflictException(conflict.id)
                 }
 
                 session.commitTransaction()
@@ -117,40 +127,94 @@ class MongoDbDocumentStore(
         }
     }
 
-    private suspend fun checkDocument(session: ClientSession, document: Document) {
-        detectConflict(document.id) {
-            if (document.version == 0L) {
-                // Insert then delete a placeholder, so that a concurrent insert of the same document causes a conflict
-                val key: BsonDocument = bsonMapper.fromDocumentKey(document.id)
-                collection.insertOne(session, BsonDocument(ID, key))
-                collection.deleteOne(session, keyFilter(document.id))
-            } else {
-                // Write the document then revert the change, so that a concurrent update causes a conflict
-                val result = collection.updateOne(
-                    session,
+    private fun updateOperation(document: Document): WriteOperation {
+        val bson: BsonDocument = bsonMapper.fromDocument(document)
+
+        return if (document.version == 0L) {
+            WriteOperation(document.id, ClientNamespacedWriteModel.insertOne(namespace, bson))
+        } else {
+            WriteOperation(
+                id = document.id,
+                model = ClientNamespacedWriteModel.replaceOne(
+                    namespace,
                     versionFilter(document.id, document.version),
-                    Updates.inc(VERSION, 1L),
-                )
-
-                if (result.matchedCount == 0L) {
-                    throw UpdateConflictException(document.id)
-                }
-
-                collection.updateOne(session, keyFilter(document.id), Updates.inc(VERSION, -1L))
-            }
+                    bson,
+                ),
+                mustMatch = true,
+            )
         }
     }
+
+    private fun checkOperations(document: Document): List<WriteOperation> =
+        if (document.version == 0L) {
+            // Insert then delete a placeholder, so that a concurrent insert of the same document causes a conflict
+            val key: BsonDocument = bsonMapper.fromDocumentKey(document.id)
+            listOf(
+                WriteOperation(document.id, ClientNamespacedWriteModel.insertOne(namespace, BsonDocument(ID, key))),
+                WriteOperation(document.id, ClientNamespacedWriteModel.deleteOne(namespace, keyFilter(document.id))),
+            )
+        } else {
+            // Write the document then revert the change, so that a concurrent update causes a conflict.
+            listOf(
+                WriteOperation(
+                    id = document.id,
+                    model = ClientNamespacedWriteModel.updateOne(
+                        namespace,
+                        versionFilter(document.id, document.version),
+                        Updates.inc(VERSION, 1L),
+                    ),
+                    mustMatch = true,
+                ),
+                WriteOperation(
+                    id = document.id,
+                    model = ClientNamespacedWriteModel.updateOne(
+                        namespace,
+                        versionFilter(document.id, document.version + 1),
+                        Updates.inc(VERSION, -1L),
+                    ),
+                ),
+            )
+        }
 
     private inline fun <T> detectConflict(id: DocumentKey, action: () -> T): T =
         try {
             action()
         } catch (exception: MongoException) {
-            if (exception.code == DUPLICATE_KEY_ERROR || exception.code == WRITE_CONFLICT_ERROR) {
+            if (isConflict(exception.code)) {
                 throw UpdateConflictException(id)
             } else {
                 throw exception
             }
         }
+
+    private inline fun <T> detectBulkConflict(operations: List<WriteOperation>, action: () -> T): T =
+        try {
+            action()
+        } catch (exception: ClientBulkWriteException) {
+            val writeError: Map.Entry<Int, WriteError>? =
+                exception.writeErrors.entries.firstOrNull { isConflict(it.value.code) }
+
+            if (writeError != null) {
+                throw UpdateConflictException(operations[writeError.key].id)
+            } else {
+                throw exception
+            }
+        } catch (exception: MongoException) {
+            if (isConflict(exception.code)) {
+                throw UpdateConflictException(operations[0].id)
+            } else {
+                throw exception
+            }
+        }
+
+    private fun isConflict(code: Int?): Boolean =
+        code == DUPLICATE_KEY_ERROR || code == WRITE_CONFLICT_ERROR
+
+    private class WriteOperation(
+        val id: DocumentKey,
+        val model: ClientNamespacedWriteModel,
+        val mustMatch: Boolean = false,
+    )
 
     //endregion
 
@@ -210,11 +274,8 @@ class MongoDbDocumentStore(
     /**
      * Creates the collection, along with an index on the document key and a TTL index on deleted documents.
      */
-    suspend fun createCollection(configureTtl: Boolean = false) {
-        database.createCollection(collectionName)
-        if (configureTtl) {
-            collection.createIndex(Indexes.ascending(DELETED), IndexOptions().expireAfter(0, TimeUnit.SECONDS))
-        }
+    suspend fun createCollection() {
+        collection.createIndex(Indexes.ascending(DELETED), IndexOptions().expireAfter(0, TimeUnit.SECONDS))
     }
 
     private fun keyFilter(id: DocumentKey): Bson = Filters.and(

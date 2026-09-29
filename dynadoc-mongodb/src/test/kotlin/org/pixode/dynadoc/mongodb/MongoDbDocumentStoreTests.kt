@@ -1,13 +1,20 @@
 package org.pixode.dynadoc.mongodb
 
+import com.mongodb.MongoCommandException
 import com.mongodb.client.model.Filters
 import com.mongodb.client.model.Sorts
+import com.mongodb.client.model.Updates
 import com.mongodb.kotlin.client.coroutine.MongoClient
+import java.time.Clock
+import java.time.Duration
 import java.util.UUID
 import java.util.stream.Stream
 import kotlinx.coroutines.flow.toList
 import kotlinx.coroutines.runBlocking
+import org.bson.BsonDocument
+import org.bson.BsonElement
 import org.bson.BsonMaximumSizeExceededException
+import org.bson.BsonString
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.BeforeAll
 import org.junit.jupiter.api.Test
@@ -22,6 +29,7 @@ import org.pixode.dynadoc.core.UpdateConflictException
 import org.pixode.dynadoc.core.getDocument
 import org.pixode.dynadoc.core.parseDocument
 import org.pixode.dynadoc.core.updateDocuments
+import org.pixode.dynadoc.mongodb.BsonMapper
 import org.pixode.dynadoc.mongodb.MongoDbDocumentStoreTests.MethodSources.PREFIX
 import org.testcontainers.junit.jupiter.Container
 import org.testcontainers.junit.jupiter.Testcontainers
@@ -37,6 +45,7 @@ class MongoDbDocumentStoreTests {
     private val store: MongoDbDocumentStore = MongoDbDocumentStore(client, DATABASE, COLLECTION)
     private val partitionKey: String = UUID.randomUUID().toString()
     private val ids: List<DocumentKey> = (0..10).map { i -> DocumentKey("${partitionKey}_$i", "0000") }
+    private val bsonMapper = BsonMapper(Duration.ZERO, Clock.systemUTC())
 
     //region updateDocuments
 
@@ -275,10 +284,41 @@ class MongoDbDocumentStoreTests {
     }
 
     @Test
+    fun updateDocuments_multipleDocumentsConcurrentTransaction() = runBlocking {
+        updateDocument(ids[0], JSON_1, 0)
+        updateDocument(ids[1], JSON_2, 0)
+
+        client.startSession().use { session ->
+            // Modify the second document in a transaction that stays open
+            session.startTransaction()
+            client.getDatabase(DATABASE).getCollection<BsonDocument>(COLLECTION).updateOne(
+                clientSession = session,
+                filter = Filters.eq("_id", bsonMapper.fromDocumentKey(ids[1])),
+                update = Updates.set("ghi", "concurrent"),
+            )
+
+            assertThrows<UpdateConflictException> {
+                store.updateDocuments(
+                    parseDocument(ids[0], JSON_3, 1),
+                    parseDocument(ids[1], JSON_3, 1),
+                )
+            }
+
+            session.abortTransaction()
+        }
+
+        val document1 = store.getDocument(ids[0])
+        val document2 = store.getDocument(ids[1])
+
+        assertDocument(document1, ids[0], JSON_1, 1)
+        assertDocument(document2, ids[1], JSON_2, 1)
+    }
+
+    @Test
     fun updateDocuments_multipleDocumentsMongoDbError() = runBlocking {
         updateDocument(ids[0], JSON_1, 0)
 
-        assertThrows<BsonMaximumSizeExceededException> {
+        assertThrows<MongoCommandException> {
             store.updateDocuments(
                 parseDocument(ids[0], JSON_2, 1),
                 parseDocument(ids[1], JSON_17MB, 0),

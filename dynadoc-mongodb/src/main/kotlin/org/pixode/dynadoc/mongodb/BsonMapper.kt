@@ -17,6 +17,7 @@ import org.bson.BsonDateTime
 import org.bson.BsonDecimal128
 import org.bson.BsonDocument
 import org.bson.BsonDouble
+import org.bson.BsonElement
 import org.bson.BsonInt32
 import org.bson.BsonInt64
 import org.bson.BsonNull
@@ -83,9 +84,12 @@ class BsonMapper(
         return result
     }
 
-    fun fromDocumentKey(id: DocumentKey): BsonDocument = BsonDocument()
-        .append(PARTITION_KEY, BsonString(id.partitionKey))
-        .append(LOCAL_KEY, BsonString(id.localKey))
+    fun fromDocumentKey(id: DocumentKey): BsonDocument = BsonDocument(
+        listOf(
+            BsonElement(PARTITION_KEY, BsonString(id.partitionKey)),
+            BsonElement(LOCAL_KEY, BsonString(id.localKey)),
+        )
+    )
 
     fun toDocumentKey(id: BsonDocument): DocumentKey = DocumentKey(
         partitionKey = id.getValue(PARTITION_KEY).asString().value,
