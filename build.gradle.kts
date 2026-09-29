@@ -2,11 +2,11 @@ import org.jetbrains.kotlin.gradle.dsl.JvmTarget
 
 allprojects {
     group = "org.pixode"
-    version = "3.0.0"
+    version = "4.0.0"
 }
 
 plugins {
-    kotlin("jvm") version "2.3.21" apply false
+    kotlin("jvm") version "2.4.20" apply false
     id("org.jetbrains.kotlinx.kover") version "0.9.8"
 }
 
