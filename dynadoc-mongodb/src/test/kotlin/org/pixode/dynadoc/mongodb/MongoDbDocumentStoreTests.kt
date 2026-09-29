@@ -1,6 +1,8 @@
 package org.pixode.dynadoc.mongodb
 
+import com.mongodb.ClientBulkWriteException
 import com.mongodb.MongoCommandException
+import com.mongodb.MongoWriteException
 import com.mongodb.client.model.Filters
 import com.mongodb.client.model.Sorts
 import com.mongodb.client.model.Updates
@@ -39,6 +41,8 @@ private const val JSON_1 = """ {"abc":"def"} """
 private const val JSON_2 = """ {"ghi":"jkl"} """
 private const val JSON_3 = """ {"mno":"pqr"} """
 private val JSON_17MB = """ {"key":"${"a".repeat(17 * 1024 * 1024)}"} """
+private val JSON_TOO_DEEP = """ {"key":${"{\"a\":".repeat(200)}1${"}".repeat(200)}} """
+private const val JSON_DOLLAR_FIELD = """ {"${'$'}key":"value"} """
 
 @Testcontainers
 class MongoDbDocumentStoreTests {
@@ -211,6 +215,18 @@ class MongoDbDocumentStoreTests {
     }
 
     @Test
+    fun updateDocuments_singleDocumentServerError() = runBlocking {
+        // Rejected by the server, which limits the nesting depth of documents
+        assertThrows<MongoWriteException> {
+            updateDocument(JSON_TOO_DEEP, 0)
+        }
+
+        val document = store.getDocument(ids[0])
+
+        assertDocument(document, ids[0], null, 0)
+    }
+
+    @Test
     fun updateDocuments_multipleDocumentsSuccess() = runBlocking {
         updateDocument(ids[0], JSON_1, 0)
         updateDocument(ids[1], JSON_2, 0)
@@ -315,6 +331,33 @@ class MongoDbDocumentStoreTests {
     }
 
     @Test
+    fun updateDocuments_multipleDocumentsConcurrentInsert() = runBlocking {
+        client.startSession().use { session ->
+            // Insert the second document in a transaction that stays open
+            session.startTransaction()
+            client.getDatabase(DATABASE).getCollection<BsonDocument>(COLLECTION).insertOne(
+                clientSession = session,
+                document = bsonMapper.fromDocument(parseDocument(ids[1], JSON_2, 0)),
+            )
+
+            assertThrows<UpdateConflictException> {
+                store.updateDocuments(
+                    parseDocument(ids[0], JSON_1, 0),
+                    parseDocument(ids[1], JSON_3, 0),
+                )
+            }
+
+            session.abortTransaction()
+        }
+
+        val document1 = store.getDocument(ids[0])
+        val document2 = store.getDocument(ids[1])
+
+        assertDocument(document1, ids[0], null, 0)
+        assertDocument(document2, ids[1], null, 0)
+    }
+
+    @Test
     fun updateDocuments_multipleDocumentsMongoDbError() = runBlocking {
         updateDocument(ids[0], JSON_1, 0)
 
@@ -330,6 +373,26 @@ class MongoDbDocumentStoreTests {
 
         assertDocument(document1, ids[0], JSON_1, 1)
         assertDocument(document2, ids[1], null, 0)
+    }
+
+    @Test
+    fun updateDocuments_multipleDocumentsWriteError() = runBlocking {
+        updateDocument(ids[0], JSON_1, 0)
+        updateDocument(ids[1], JSON_2, 0)
+
+        // Rejected by the server, which doesn't allow top-level field names starting with '$' in updates
+        assertThrows<ClientBulkWriteException> {
+            store.updateDocuments(
+                parseDocument(ids[0], JSON_3, 1),
+                parseDocument(ids[1], JSON_DOLLAR_FIELD, 1),
+            )
+        }
+
+        val document1 = store.getDocument(ids[0])
+        val document2 = store.getDocument(ids[1])
+
+        assertDocument(document1, ids[0], JSON_1, 1)
+        assertDocument(document2, ids[1], JSON_2, 1)
     }
 
     //endregion

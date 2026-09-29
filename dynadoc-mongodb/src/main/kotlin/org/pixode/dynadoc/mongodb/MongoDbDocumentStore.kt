@@ -207,7 +207,7 @@ class MongoDbDocumentStore(
             }
         }
 
-    private fun isConflict(code: Int?): Boolean =
+    private fun isConflict(code: Int): Boolean =
         code == DUPLICATE_KEY_ERROR || code == WRITE_CONFLICT_ERROR
 
     private class WriteOperation(
