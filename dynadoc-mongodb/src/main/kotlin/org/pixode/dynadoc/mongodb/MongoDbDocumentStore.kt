@@ -36,7 +36,7 @@ private const val WRITE_CONFLICT_ERROR = 112
 /**
  * Represents an implementation of the [DocumentStore] interface that relies on MongoDB for persistence.
  *
- * Documents are stored with an `_id` of the form `{ partition_key, clustering_key }`, and a `_version` field.
+ * Documents are stored with an `_id` of the form `{ partition_key, local_key }`, and a `_version` field.
  * Updating multiple documents atomically relies on MongoDB transactions, which require a replica set or a sharded
  * cluster.
  */
@@ -182,7 +182,7 @@ class MongoDbDocumentStore(
         val distinctIds: List<DocumentKey> = idList.distinct()
         val filter: Bson = Filters.and(
             Filters.`in`(ID, distinctIds.map(bsonMapper::fromDocumentKey)),
-            Filters.`in`("$ID.$PARTITION_KEY", distinctIds.map { it.partitionKey }.distinct()),
+            Filters.`in`("$ID.$PARTITION_KEY", distinctIds.map { it.partitionKey }),
         )
 
         val documents: Map<DocumentKey, Document> = collection.find(filter)
@@ -212,7 +212,7 @@ class MongoDbDocumentStore(
      */
     suspend fun createCollection() {
         database.createCollection(collectionName)
-        collection.createIndex(Indexes.ascending("$ID.$PARTITION_KEY", "$ID.$CLUSTERING_KEY"))
+        collection.createIndex(Indexes.ascending("$ID.$PARTITION_KEY", "$ID.$LOCAL_KEY"))
         collection.createIndex(Indexes.ascending(DELETED), IndexOptions().expireAfter(0, TimeUnit.SECONDS))
     }
 

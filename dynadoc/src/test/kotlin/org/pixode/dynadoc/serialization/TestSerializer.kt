@@ -54,7 +54,7 @@ object TestSerializer : JsonSerializer {
                 .mapIndexed { index, key ->
                     Document(
                         id = key,
-                        body = when (key.sortKey) {
+                        body = when (key.localKey) {
                             "STRING" -> jsonFor(key.partitionKey)
                             "INT" -> jsonFor(key.partitionKey.toInt())
                             else -> null

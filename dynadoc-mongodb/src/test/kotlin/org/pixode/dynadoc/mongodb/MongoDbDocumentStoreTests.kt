@@ -351,11 +351,11 @@ class MongoDbDocumentStoreTests {
         val result = store.find(
             Filters.and(
                 Filters.eq("$ID.$PARTITION_KEY", partitionKey),
-                Filters.gte("$ID.$CLUSTERING_KEY", "ABC03"),
-                Filters.lte("$ID.$CLUSTERING_KEY", "ABC05"),
+                Filters.gte("$ID.$LOCAL_KEY", "ABC03"),
+                Filters.lte("$ID.$LOCAL_KEY", "ABC05"),
             ),
         ) {
-            sort(Sorts.ascending("$ID.$CLUSTERING_KEY"))
+            sort(Sorts.ascending("$ID.$LOCAL_KEY"))
         }.toList()
 
         assertDocuments(result, documents.slice(3..5))
@@ -374,7 +374,7 @@ class MongoDbDocumentStoreTests {
                 Filters.gt("a", 4),
             ),
         ) {
-            sort(Sorts.ascending("$ID.$CLUSTERING_KEY"))
+            sort(Sorts.ascending("$ID.$LOCAL_KEY"))
         }.toList()
 
         assertDocuments(result, documents.slice(5..9))
@@ -412,11 +412,11 @@ class MongoDbDocumentStoreTests {
         val result = store.find(
             Filters.and(
                 Filters.eq("$ID.$PARTITION_KEY", partitionKey),
-                Filters.gte("$ID.$CLUSTERING_KEY", "ABC0120"),
-                Filters.lte("$ID.$CLUSTERING_KEY", "ABC0180"),
+                Filters.gte("$ID.$LOCAL_KEY", "ABC0120"),
+                Filters.lte("$ID.$LOCAL_KEY", "ABC0180"),
             ),
         ) {
-            sort(Sorts.ascending("$ID.$CLUSTERING_KEY"))
+            sort(Sorts.ascending("$ID.$LOCAL_KEY"))
             batchSize(7)
         }.toList()
 

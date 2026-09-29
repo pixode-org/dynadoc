@@ -72,12 +72,12 @@ class AttributeMapper(
 
     fun fromDocumentKey(id: DocumentKey) = mapOf(
         PARTITION_KEY to AttributeValue.S(id.partitionKey),
-        SORT_KEY to AttributeValue.S(id.sortKey),
+        SORT_KEY to AttributeValue.S(id.localKey),
     )
 
     fun toDocumentKey(attributes: Map<String, AttributeValue>): DocumentKey = DocumentKey(
         partitionKey = (attributes.getValue(PARTITION_KEY) as AttributeValue.S).value,
-        sortKey = (attributes.getValue(SORT_KEY) as AttributeValue.S).value,
+        localKey = (attributes.getValue(SORT_KEY) as AttributeValue.S).value,
     )
 
     private fun jsonElementToAttributeValue(element: JsonElement): AttributeValue = when (element) {

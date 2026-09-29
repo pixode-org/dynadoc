@@ -22,9 +22,9 @@ data class Document(
  */
 data class DocumentKey(
     val partitionKey: String,
-    val sortKey: String,
+    val localKey: String,
 ) {
-    override fun toString() = "(\"$partitionKey\", \"$sortKey\")"
+    override fun toString() = "(\"$partitionKey\", \"$localKey\")"
 }
 
 

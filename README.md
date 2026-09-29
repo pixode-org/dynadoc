@@ -13,7 +13,7 @@ Dynadoc translates JSON documents to DynamoDB items by converting top-level keys
 It also adds a few special attributes that don't appear in the JSON, but appear in the `JsonEntity` objects:
 
 - `partition_key`: The partition key of the DynamoDB table. 
-- `sort_key`: The sort key of the DynamoDB table.
+- `sort_key`: The sort key of the DynamoDB table, holding the local key of the document.
 - `version`: An integer representing the version of the item, for optimistic concurrency management purposes.
 - `deleted`: An attribute set on deleted objects. It contains a value that can be used with the TTL feature of DynamoDB to clear soft-deleted items from the table.
 
@@ -21,7 +21,7 @@ It also adds a few special attributes that don't appear in the JSON, but appear 
 
 With MongoDB, top-level keys of the JSON document become fields of the MongoDB document, and the following reserved fields are added:
 
-- `_id`: An embedded document of the form `{ partition_key, clustering_key }`, where `clustering_key` holds the sort key.
+- `_id`: An embedded document of the form `{ partition_key, local_key }`, where `local_key` holds the local key.
 - `_version`: An integer representing the version of the document, for optimistic concurrency management purposes.
 - `_deleted`: A date set on deleted documents, used by a TTL index to clear soft-deleted documents from the collection.
 
@@ -52,7 +52,7 @@ The `Entity` property can be null if the document does not exist. This can be th
 ```kotlin
 data class DocumentKey(
     val partitionKey: String,
-    val sortKey: String,
+    val localKey: String,
 )
 ```
 
@@ -146,7 +146,7 @@ val product = Product(
 
 val entity: JsonEntity<Product> = createEntity(
     partitionKey = "vanilla-ice-cream",
-    sortKey = "product",
+    localKey = "product",
     entity = product
 )
 ```
@@ -292,7 +292,7 @@ val result = documentStore.find(
         Filters.lte("price", 250),
     ),
 ) {
-    sort(Sorts.ascending("_id.clustering_key"))
+    sort(Sorts.ascending("_id.local_key"))
 }
 
 val entities: Flow<JsonEntity<Product?>> = result.map(DefaultJsonSerializer::fromDocument)
