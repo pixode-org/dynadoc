@@ -210,21 +210,11 @@ class MongoDbDocumentStore(
     /**
      * Creates the collection, along with an index on the document key and a TTL index on deleted documents.
      */
-    suspend fun createCollection() {
+    suspend fun createCollection(configureTtl: Boolean = false) {
         database.createCollection(collectionName)
-        collection.createIndex(Indexes.ascending("$ID.$PARTITION_KEY", "$ID.$LOCAL_KEY"))
-        collection.createIndex(Indexes.ascending(DELETED), IndexOptions().expireAfter(0, TimeUnit.SECONDS))
-    }
-
-    /**
-     * Shards the collection using the partition key as the shard key. This must be executed against a sharded
-     * cluster, after [createCollection].
-     */
-    suspend fun shardCollection() {
-        client.getDatabase("admin").runCommand(
-            BsonDocument("shardCollection", BsonString("$databaseName.$collectionName"))
-                .append("key", BsonDocument("$ID.$PARTITION_KEY", BsonInt32(1))),
-        )
+        if (configureTtl) {
+            collection.createIndex(Indexes.ascending(DELETED), IndexOptions().expireAfter(0, TimeUnit.SECONDS))
+        }
     }
 
     private fun keyFilter(id: DocumentKey): Bson = Filters.and(

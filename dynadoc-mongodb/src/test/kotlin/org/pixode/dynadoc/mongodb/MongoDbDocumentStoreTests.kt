@@ -342,7 +342,7 @@ class MongoDbDocumentStoreTests {
     //region find
 
     @Test
-    fun find_filterClusteringKey() = runBlocking {
+    fun find_filterLocalKey() = runBlocking {
         val documents = (0..9).map { i ->
             parseDocument(DocumentKey(partitionKey, "ABC0$i"), """ {"a":$i} """, 0)
         }
@@ -356,9 +356,9 @@ class MongoDbDocumentStoreTests {
             ),
         ) {
             sort(Sorts.ascending("$ID.$LOCAL_KEY"))
-        }.toList()
+        }
 
-        assertDocuments(result, documents.slice(3..5))
+        assertDocuments(result.toList(), documents.slice(3..5))
     }
 
     @Test
@@ -375,9 +375,9 @@ class MongoDbDocumentStoreTests {
             ),
         ) {
             sort(Sorts.ascending("$ID.$LOCAL_KEY"))
-        }.toList()
+        }
 
-        assertDocuments(result, documents.slice(5..9))
+        assertDocuments(result.toList(), documents.slice(5..9))
     }
 
     @Test
@@ -397,9 +397,9 @@ class MongoDbDocumentStoreTests {
                 Filters.gte("b", "val"),
                 Filters.lte("b", "value 4"),
             ),
-        ).toList()
+        )
 
-        assertDocuments(result.sortedBy { it.id.partitionKey }, documents.slice(0..4))
+        assertDocuments(result.toList().sortedBy { it.id.partitionKey }, documents.slice(0..4))
     }
 
     @Test
@@ -418,9 +418,9 @@ class MongoDbDocumentStoreTests {
         ) {
             sort(Sorts.ascending("$ID.$LOCAL_KEY"))
             batchSize(7)
-        }.toList()
+        }
 
-        assertDocuments(result, documents.slice(20..80))
+        assertDocuments(result.toList(), documents.slice(20..80))
     }
 
     //endregion
