@@ -100,22 +100,12 @@ class BsonMapper(
         is JsonNull -> BsonNull.VALUE
         is JsonPrimitive if element.isString -> BsonString(element.content)
         is JsonPrimitive if element.booleanOrNull != null -> BsonBoolean(element.boolean)
-        is JsonPrimitive -> numberToBsonValue(element.content)
+        is JsonPrimitive -> BsonDecimal128(Decimal128(BigDecimal(element.content)))
         is JsonArray -> BsonArray(element.map { jsonElementToBsonValue(it) })
         is JsonObject -> BsonDocument().apply {
             for ((key, value) in element) {
                 this[key] = jsonElementToBsonValue(value)
             }
-        }
-    }
-
-    private fun numberToBsonValue(number: String): BsonValue {
-        val longValue: Long? = if (integerPattern.matches(number)) number.toLongOrNull() else null
-
-        return if (longValue != null) {
-            BsonInt64(longValue)
-        } else {
-            BsonDecimal128(Decimal128(BigDecimal(number)))
         }
     }
 

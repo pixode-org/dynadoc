@@ -28,8 +28,6 @@ import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.toList
 import org.bson.BsonDocument
-import org.bson.BsonInt32
-import org.bson.BsonString
 import org.bson.conversions.Bson
 import org.pixode.dynadoc.core.Document
 import org.pixode.dynadoc.core.DocumentKey
@@ -93,7 +91,6 @@ class MongoDbDocumentStore(
     }
 
     private suspend fun updateMultipleDocuments(updatedDocuments: List<Document>, checkedDocuments: List<Document>) {
-        // Building the operations validates every document before starting the transaction
         val operations: List<WriteOperation> =
             updatedDocuments.map(::updateOperation) + checkedDocuments.flatMap(::checkOperations)
 

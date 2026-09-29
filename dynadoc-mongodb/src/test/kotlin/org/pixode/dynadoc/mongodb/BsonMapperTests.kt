@@ -32,8 +32,8 @@ class BsonMapperTests {
     @CsvSource(
         value = [
             """ { "key": "abc" }                    | STRING """,
-            """ { "key": 999 }                      | INT64 """,
-            """ { "key": -999 }                     | INT64 """,
+            """ { "key": 999 }                      | DECIMAL128 """,
+            """ { "key": -999 }                     | DECIMAL128 """,
             """ { "key": 99999999999999999999 }     | DECIMAL128 """,
             """ { "key": 1.5 }                      | DECIMAL128 """,
             """ { "key": 1e3 }                      | DECIMAL128 """,

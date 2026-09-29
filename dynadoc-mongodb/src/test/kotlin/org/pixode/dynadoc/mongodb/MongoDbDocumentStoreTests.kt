@@ -14,9 +14,7 @@ import java.util.stream.Stream
 import kotlinx.coroutines.flow.toList
 import kotlinx.coroutines.runBlocking
 import org.bson.BsonDocument
-import org.bson.BsonElement
 import org.bson.BsonMaximumSizeExceededException
-import org.bson.BsonString
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.BeforeAll
 import org.junit.jupiter.api.Test
@@ -31,7 +29,6 @@ import org.pixode.dynadoc.core.UpdateConflictException
 import org.pixode.dynadoc.core.getDocument
 import org.pixode.dynadoc.core.parseDocument
 import org.pixode.dynadoc.core.updateDocuments
-import org.pixode.dynadoc.mongodb.BsonMapper
 import org.pixode.dynadoc.mongodb.MongoDbDocumentStoreTests.MethodSources.PREFIX
 import org.testcontainers.junit.jupiter.Container
 import org.testcontainers.junit.jupiter.Testcontainers
@@ -300,7 +297,7 @@ class MongoDbDocumentStoreTests {
     }
 
     @Test
-    fun updateDocuments_multipleDocumentsConcurrentTransaction() = runBlocking {
+    fun updateDocuments_multipleDocumentsTransactionConflictWithUpdate() = runBlocking {
         updateDocument(ids[0], JSON_1, 0)
         updateDocument(ids[1], JSON_2, 0)
 
@@ -331,7 +328,7 @@ class MongoDbDocumentStoreTests {
     }
 
     @Test
-    fun updateDocuments_multipleDocumentsConcurrentInsert() = runBlocking {
+    fun updateDocuments_multipleDocumentsTransactionConflictWithInsert() = runBlocking {
         client.startSession().use { session ->
             // Insert the second document in a transaction that stays open
             session.startTransaction()
