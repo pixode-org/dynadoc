@@ -135,7 +135,7 @@ class BsonMapperTests {
             """ { "key": [ 2, 3 ] } """,
             """ { "key": [ 2, "abc", { "sub": 2 } ] } """,
             """ { "key": { "sub": 2, "arr": [ 2, "abc" ] } } """,
-            """ { "partition_key": "a", "local_key": "b" } """,
+            """ { "pk": "a", "lk": "b" } """,
             """ { } """,
         ],
     )

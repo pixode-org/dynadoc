@@ -28,14 +28,12 @@ import org.pixode.dynadoc.core.Document
 import org.pixode.dynadoc.core.DocumentKey
 
 const val ID = "_id"
-const val PARTITION_KEY = "partition_key"
-const val LOCAL_KEY = "local_key"
+const val PARTITION_KEY = "pk"
+const val LOCAL_KEY = "lk"
 const val VERSION = "_version"
 const val DELETED = "_deleted"
 
 val reservedFields: Set<String> = setOf(ID, VERSION, DELETED)
-
-private val integerPattern = Regex("-?\\d+")
 
 class BsonMapper(
     private val expiration: Duration,

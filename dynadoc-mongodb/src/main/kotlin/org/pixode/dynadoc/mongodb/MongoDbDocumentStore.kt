@@ -4,6 +4,8 @@ import com.mongodb.ClientBulkWriteException
 import com.mongodb.MongoException
 import com.mongodb.MongoNamespace
 import com.mongodb.WriteError
+import com.mongodb.client.model.ClusteredIndexOptions
+import com.mongodb.client.model.CreateCollectionOptions
 import com.mongodb.client.model.Filters
 import com.mongodb.client.model.IndexOptions
 import com.mongodb.client.model.Indexes
@@ -40,14 +42,15 @@ private const val WRITE_CONFLICT_ERROR = 112
 /**
  * Represents an implementation of the [DocumentStore] interface that relies on MongoDB for persistence.
  *
- * Documents are stored with an `_id` of the form `{ partition_key, local_key }`, and a `_version` field.
+ * Documents are stored with an `_id` of the form `{ pk, lk }`, where `pk` is the partition key and `lk` the local
+ * key, and a `_version` field.
  * Updating multiple documents atomically relies on MongoDB transactions, which require a replica set or a sharded
  * cluster, and on client bulk writes, which require MongoDB 8.0 or later.
  */
 class MongoDbDocumentStore(
     private val client: MongoClient,
-    private val databaseName: String,
-    private val collectionName: String,
+    databaseName: String,
+    collectionName: String,
     expiration: Duration = Duration.ofDays(30),
     clock: Clock = Clock.systemUTC(),
 ) : DocumentStore {
@@ -269,9 +272,14 @@ class MongoDbDocumentStore(
             .map(bsonMapper::toDocument)
 
     /**
-     * Creates the collection, along with an index on the document key and a TTL index on deleted documents.
+     * Creates the collection as a clustered collection ordered by document key, along with a TTL index on deleted
+     * documents.
      */
     suspend fun createCollection() {
+        database.createCollection(
+            namespace.collectionName,
+            CreateCollectionOptions().clusteredIndexOptions(ClusteredIndexOptions(Indexes.ascending(ID), true)),
+        )
         collection.createIndex(Indexes.ascending(DELETED), IndexOptions().expireAfter(0, TimeUnit.SECONDS))
     }
 

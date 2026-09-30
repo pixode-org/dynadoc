@@ -21,7 +21,10 @@ data class Document(
  * Represents a key uniquely identifying a document in a store.
  */
 data class DocumentKey(
+    /** The value identifying the partition containing the document. **/
     val partitionKey: String,
+
+    /** The value uniquely identifying the document within its partition. **/
     val localKey: String,
 ) {
     override fun toString() = "(\"$partitionKey\", \"$localKey\")"

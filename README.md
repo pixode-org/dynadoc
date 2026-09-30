@@ -21,7 +21,7 @@ It also adds a few special attributes that don't appear in the JSON, but appear 
 
 With MongoDB, top-level keys of the JSON document become fields of the MongoDB document, and the following reserved fields are added:
 
-- `_id`: An embedded document of the form `{ partition_key, local_key }`, where `local_key` holds the local key.
+- `_id`: An embedded document of the form `{ pk, lk }`, where `pk` holds the partition key and `lk` holds the local key.
 - `_version`: An integer representing the version of the document, for optimistic concurrency management purposes.
 - `_deleted`: A date set on deleted documents, used by a TTL index to clear soft-deleted documents from the collection.
 
@@ -269,16 +269,21 @@ val client: MongoClient = MongoClient.create("mongodb://localhost:27017/?replica
 
 val documentStore = MongoDbDocumentStore(client, "database", "collection")
 
-// Create the collection, the key index and the TTL index for deleted documents
+// Create the collection, clustered by document key, and the TTL index for deleted documents
 documentStore.createCollection()
-
-// On a sharded cluster, shard the collection using the partition key as the shard key
-documentStore.shardCollection()
 
 val entityStore = EntityStore(documentStore, DefaultJsonSerializer)
 ```
 
 Updating a single document works with any deployment. Updating multiple documents atomically (for example with `EntityStore.transaction`) relies on MongoDB transactions, which require a replica set or a sharded cluster.
+
+`createCollection` creates a [clustered collection](https://www.mongodb.com/docs/manual/core/clustered-collections/), which stores documents ordered by `_id`, so that the documents of a partition are stored together and sorted by local key. An existing collection cannot be converted to a clustered collection.
+
+On a sharded cluster, the collection should be sharded using the partition key as the shard key:
+
+```javascript
+sh.shardCollection("database.collection", { "_id.pk": 1 })
+```
 
 Read concern and read preference are configured on the `MongoClient`.
 
@@ -287,16 +292,22 @@ Custom queries can be performed using the `find` method:
 ```kotlin
 val result = documentStore.find(
     Filters.and(
-        Filters.eq("_id.partition_key", "products"),
+        Filters.gte("_id", BsonDocument("pk", BsonString("products")).append("lk", BsonString("A"))),
+        Filters.lt("_id", BsonDocument("pk", BsonString("products")).append("lk", BsonString("M"))),
+        Filters.eq("_id.pk", "products"),
         Filters.gte("price", 100),
         Filters.lte("price", 250),
     ),
 ) {
-    sort(Sorts.ascending("_id.local_key"))
+    sort(Sorts.ascending("_id"))
 }
 
 val entities: Flow<JsonEntity<Product?>> = result.map(DefaultJsonSerializer::fromDocument)
 ```
+
+To query a range of local keys, the range should be expressed on the whole `_id`, with `pk` before `lk`, rather than on `_id.lk`. This lets MongoDB scan only that range of the clustered collection, and return the documents already sorted by `_id`. A range on `_id.lk` reads every document of the partition instead.
+
+The separate condition on `_id.pk` lets a sharded cluster send the query to a single shard. Without it, a range on `_id` is sent to every shard.
 
 ## License
 
