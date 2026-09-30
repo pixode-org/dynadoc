@@ -243,7 +243,7 @@ class MongoDbDocumentStore(
         val distinctIds: List<DocumentKey> = idList.distinct()
         val filter: Bson = Filters.and(
             Filters.`in`(ID, distinctIds.map(bsonMapper::fromDocumentKey)),
-            Filters.`in`("$ID.$PARTITION_KEY", distinctIds.map { it.partitionKey }),
+            Filters.`in`("$ID.$PARTITION_KEY", distinctIds.map { it.partitionKey }.distinct()),
         )
 
         val documents: Map<DocumentKey, Document> = collection.find(filter)
@@ -275,10 +275,8 @@ class MongoDbDocumentStore(
         collection.createIndex(Indexes.ascending(DELETED), IndexOptions().expireAfter(0, TimeUnit.SECONDS))
     }
 
-    private fun keyFilter(id: DocumentKey): Bson = Filters.and(
-        Filters.eq(ID, bsonMapper.fromDocumentKey(id)),
-        Filters.eq("$ID.$PARTITION_KEY", id.partitionKey),
-    )
+    // An equality on the whole _id is enough for the query to be routed to a single shard
+    private fun keyFilter(id: DocumentKey): Bson = Filters.eq(ID, bsonMapper.fromDocumentKey(id))
 
     private fun versionFilter(id: DocumentKey, version: Long): Bson = Filters.and(
         keyFilter(id),
