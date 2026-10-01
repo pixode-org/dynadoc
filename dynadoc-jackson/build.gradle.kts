@@ -18,7 +18,7 @@ publishing {
 
             pom {
                 name = "Dynadoc Jackson"
-                description = "Dynadoc is a Kotlin library for using DynamoDB as a JSON document store."
+                description = "A Kotlin library for storing typed objects as versioned JSON documents in a database-agnostic way (with backends such as DynamoDB and MongoDB), with optimistic concurrency and atomic multi-document updates."
                 url = "https://github.com/pixode-org/dynadoc"
                 licenses {
                     license {
