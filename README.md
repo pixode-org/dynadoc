@@ -2,7 +2,7 @@
 
 <a href="https://central.sonatype.com/artifact/org.pixode/dynadoc">![Maven Central Version](https://img.shields.io/maven-central/v/org.pixode/dynadoc)</a>
 
-Dynadoc is a Kotlin library for using DynamoDB or MongoDB as a JSON document store. It manages the mapping between Kotlin objects and JSON documents.
+Dynadoc is a Kotlin library for using DynamoDB, MongoDB or TiKV as a JSON document store. It manages the mapping between Kotlin objects and JSON documents.
 
 ## Concepts
 
@@ -26,6 +26,15 @@ With MongoDB, top-level keys of the JSON document become fields of the MongoDB d
 - `_deleted`: A date set on deleted documents, used by a TTL index to clear soft-deleted documents from the collection.
 
 These field names cannot be used in document bodies.
+
+### TiKV mapping
+
+With TiKV, each document is stored as a single key-value pair:
+
+- The key is the concatenation of the first 8 bytes of the SHA-256 hash of a configurable namespace, the first 16 bytes of the SHA-256 hash of the partition key, and the local key, strings being encoded in UTF-8. Partitions are spread evenly across the key space of the namespace, while the documents of a partition are stored together and sorted by local key.
+- The value is a UTF-8 encoded JSON object of the form `{ partition_key, local_key, version, body }`, where `partition_key` and `local_key` hold the partition key and local key, `version` the version of the document and `body` the JSON document. Since the body is nested, there are no reserved field names.
+
+Deleted documents are kept with a `null` body so that their version is preserved. TiKV transactions don't support TTLs, so they are never removed automatically.
 
 ### The `JsonEntity<T>` type
 
@@ -71,6 +80,8 @@ dependencies {
 The core `dynadoc` library does not depend on the AWS SDK. `DynamoDbDocumentStore` is in the `org.pixode.dynadoc.dynamodb` package.
 
 To use MongoDB instead, add a dependency to [dynadoc-mongodb](https://central.sonatype.com/artifact/org.pixode/dynadoc-mongodb), which references the MongoDB Kotlin coroutine driver. `MongoDbDocumentStore` is in the `org.pixode.dynadoc.mongodb` package. See [Using MongoDB](#using-mongodb).
+
+To use TiKV, add a dependency to `dynadoc-tikv`, which references the TiKV Java client. `TiKVDocumentStore` is in the `org.pixode.dynadoc.tikv` package. See [Using TiKV](#using-tikv).
 
 **Note:** The [dynadoc-jackson](https://central.sonatype.com/artifact/org.pixode/dynadoc-jackson) library is also provided to allow using Jackson as the JSON serializer instead of kotlinx.serialization. It is not required to use the core library, and can be added as an optional dependency.
 
@@ -308,6 +319,32 @@ val entities: Flow<JsonEntity<Product?>> = result.map(DefaultJsonSerializer::fro
 To query a range of local keys, the range should be expressed on the whole `_id`, with `pk` before `lk`, rather than on `_id.lk`. This lets MongoDB scan only that range of the clustered collection, and return the documents already sorted by `_id`. A range on `_id.lk` reads every document of the partition instead.
 
 The separate condition on `_id.pk` lets a sharded cluster send the query to a single shard. Without it, a range on `_id` is sent to every shard.
+
+## Using TiKV
+
+`TiKVDocumentStore` implements the same `DocumentStore` interface, using the transactional API of TiKV.
+
+```kotlin
+val session: TiSession = TiSession.create(TiConfiguration.createDefault("pd-host:2379"))
+
+val documentStore = TiKVDocumentStore(session, "products")
+
+val entityStore = EntityStore(documentStore, DefaultJsonSerializer)
+```
+
+The namespace isolates the documents of a store from the other data of the cluster, in the same way as a table or a collection. Its hash is used as the key prefix, so all namespaces have the same key length.
+
+Updates are optimistic transactions: the documents are read at the start timestamp of the transaction to check their versions, then written using the two-phase commit protocol. Checked documents are locked without being modified, so that a concurrent write to any of the documents causes an `UpdateConflictException`.
+
+The documents of a partition can be retrieved, sorted by local key, using the `scan` method. The range of local keys is optional, with an inclusive start and an exclusive end:
+
+```kotlin
+val result = documentStore.scan("products", startLocalKey = "A", endLocalKey = "M")
+
+val entities: Flow<JsonEntity<Product?>> = result.map(DefaultJsonSerializer::fromDocument)
+```
+
+Reads use a snapshot at the latest timestamp, so they are strongly consistent.
 
 ## License
 

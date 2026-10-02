@@ -9,4 +9,5 @@ include(
     "dynadoc-jackson",
     "dynadoc-dynamodb",
     "dynadoc-mongodb",
+    "dynadoc-tikv",
 )

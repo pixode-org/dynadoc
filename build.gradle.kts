@@ -49,4 +49,5 @@ dependencies {
     kover(project(":dynadoc-jackson"))
     kover(project(":dynadoc-dynamodb"))
     kover(project(":dynadoc-mongodb"))
+    kover(project(":dynadoc-tikv"))
 }

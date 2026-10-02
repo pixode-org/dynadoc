@@ -1,15 +1,14 @@
-plugins {
-    id("org.jetbrains.kotlin.plugin.serialization") version "2.4.20"
-}
-
 dependencies {
+    api(project(":dynadoc"))
+    api("org.tikv:tikv-client-java:3.3.5")
     implementation("org.jetbrains.kotlinx:kotlinx-serialization-json:1.11.0")
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-core:1.10.2")
 
     testImplementation(kotlin("test"))
     testImplementation(platform("org.junit:junit-bom:5.14.4"))
     testImplementation("org.junit.jupiter:junit-jupiter")
-    testImplementation("io.mockk:mockk:1.14.9")
+    testImplementation("org.testcontainers:testcontainers:2.0.5")
+    testImplementation("org.testcontainers:junit-jupiter:1.21.4")
 
     testRuntimeOnly("org.junit.platform:junit-platform-launcher")
 }
@@ -20,7 +19,7 @@ publishing {
             from(components["java"])
 
             pom {
-                name = "Dynadoc"
+                name = "Dynadoc TiKV"
                 description = "A Kotlin library for storing typed objects JSON documents in a database-agnostic way, with optimistic concurrency and atomic multi-document updates."
                 url = "https://github.com/pixode-org/dynadoc"
                 licenses {
