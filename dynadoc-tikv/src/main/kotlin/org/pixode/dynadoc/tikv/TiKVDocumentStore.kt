@@ -15,9 +15,12 @@ import org.tikv.common.TiSession
 import org.tikv.common.exception.KeyException
 import org.tikv.common.exception.RegionException
 import org.tikv.common.exception.TiClientInternalException
+import org.tikv.common.exception.WriteConflictException as CommonWriteConflictException
 import org.tikv.common.meta.TiTimestamp
+import org.tikv.common.operation.KVErrorHandler
 import org.tikv.common.operation.iterator.ConcreteScanIterator
 import org.tikv.common.region.RegionManager
+import org.tikv.common.region.RegionStoreClient
 import org.tikv.common.region.TiRegion
 import org.tikv.common.region.TiStore
 import org.tikv.common.util.BackOffFunction
@@ -25,10 +28,13 @@ import org.tikv.common.util.BackOffer
 import org.tikv.common.util.ConcreteBackOffer
 import org.tikv.kvproto.Kvrpcpb
 import org.tikv.kvproto.Kvrpcpb.Mutation
+import org.tikv.kvproto.TikvGrpc
 import org.tikv.shade.com.google.protobuf.ByteString
+import org.tikv.txn.exception.WriteConflictException as TxnWriteConflictException
 
 private const val LOCK_TTL_MS = 3000L
 private const val WRITE_MAX_BACKOFF_MS = 20000
+private const val ROLLBACK_MAX_BACKOFF_MS = 5000
 
 /**
  * Represents an implementation of the [DocumentStore] interface that relies on the transactional API of TiKV for
@@ -97,8 +103,11 @@ class TiKVDocumentStore(
             // The primary key is written first, as the status of the transaction is determined by its lock
             prewrite(backOffer, primaryKey, listOf(mutations.getValue(primaryKey)), startTs)
             prewrite(backOffer, primaryKey, mutations.values.drop(1), startTs)
-        } catch (exception: KeyException) {
-            if (exception.message.orEmpty().contains("conflict", ignoreCase = true)) {
+        } catch (exception: RuntimeException) {
+            // The primary key is not committed, so the transaction can be abandoned
+            rollback(mutations.keys.toList(), startTs)
+
+            if (isWriteConflict(exception)) {
                 throw UpdateConflictException(findConflict(documents, keys, currentValues))
             } else {
                 throw exception
@@ -111,7 +120,9 @@ class TiKVDocumentStore(
             // The transaction is committed once the primary key is committed
             commit(backOffer, listOf(primaryKey), startTs, commitTs)
         } catch (_: KeyException) {
-            // The lock has expired and the transaction has been rolled back by another transaction
+            // The lock has expired and the transaction has been rolled back by another transaction, or the commit
+            // timestamp is too old: either way, the transaction has not been committed
+            rollback(mutations.keys.toList(), startTs)
             throw UpdateConflictException(documents[0].id)
         }
 
@@ -132,6 +143,60 @@ class TiKVDocumentStore(
         forEachRegion(backOffer, keys, { it }) { region, store, regionKeys ->
             session.regionStoreClientBuilder.build(region, store)
                 .commit(backOffer, regionKeys, startTs.version, commitTs.version)
+        }
+
+    /**
+     * Rolls back the locks of an abandoned transaction, so that other transactions don't wait for them to expire.
+     * This is a best effort: locks that can't be rolled back are resolved by other transactions once they expire.
+     */
+    private fun rollback(keys: List<ByteString>, startTs: TiTimestamp) {
+        val backOffer: BackOffer = ConcreteBackOffer.newCustomBackOff(ROLLBACK_MAX_BACKOFF_MS)
+
+        try {
+            forEachRegion(backOffer, keys, { it }) { region, store, regionKeys ->
+                val client: RegionStoreClient = session.regionStoreClientBuilder.build(region, store)
+                val errorHandler = KVErrorHandler<Kvrpcpb.BatchRollbackResponse>(
+                    regionManager,
+                    client,
+                    client.lockResolverClient,
+                    { response -> if (response.hasRegionError()) response.regionError else null },
+                    { response -> if (response.hasError()) response.error else null },
+                    { null },
+                    startTs.version,
+                    false,
+                )
+
+                client.callWithRetry(
+                    backOffer,
+                    TikvGrpc.getKvBatchRollbackMethod(),
+                    {
+                        Kvrpcpb.BatchRollbackRequest.newBuilder()
+                            .setContext(client.region.leaderContext)
+                            .setStartVersion(startTs.version)
+                            .addAllKeys(regionKeys)
+                            .build()
+                    },
+                    errorHandler,
+                )
+            }
+        } catch (_: Exception) {
+            // The remaining locks expire after LOCK_TTL_MS
+        }
+    }
+
+    /**
+     * Returns whether the exception, or one of its causes, reports that another transaction has written one of the
+     * keys, which guarantees that this transaction has not been committed.
+     */
+    private fun isWriteConflict(exception: Throwable): Boolean =
+        generateSequence(exception) { it.cause }.any { cause ->
+            when (cause) {
+                is TxnWriteConflictException, is CommonWriteConflictException -> true
+                is KeyException -> cause.keyErr?.let { it.hasConflict() || it.hasAlreadyExist() }
+                    // The client sometimes creates the exception from the text of the key error only
+                    ?: cause.message.orEmpty().let { it.contains("conflict", ignoreCase = true) || "already_exist" in it }
+                else -> false
+            }
         }
 
     /**

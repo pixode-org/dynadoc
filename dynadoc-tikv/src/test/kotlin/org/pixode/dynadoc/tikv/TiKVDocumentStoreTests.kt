@@ -311,16 +311,7 @@ class TiKVDocumentStoreTests {
 
         // Start a concurrent transaction writing the second document, and commit it after the start of the update.
         // The update reads the second document at its initial version, but its write conflicts with the commit.
-        val concurrentKey: ByteArray = keyMapper.fromDocumentKey(ids[1])
-        val concurrentValue: ByteArray = valueMapper.fromDocument(parseDocument(ids[1], JSON_3, 1))
-        val committer = TwoPhaseCommitter(session, session.timestamp.version)
-        committer.prewritePrimaryKey(ConcreteBackOffer.newCustomBackOff(5000), concurrentKey, concurrentValue)
-
-        val commitThread = thread {
-            Thread.sleep(1000)
-            val commitTs: TiTimestamp = session.timestamp
-            committer.commitPrimaryKey(ConcreteBackOffer.newCustomBackOff(5000), concurrentKey, commitTs.version)
-        }
+        val commitThread: Thread = commitConcurrently(parseDocument(ids[1], JSON_3, 1))
 
         val exception = assertThrows<UpdateConflictException> {
             if (checkOnly) {
@@ -337,7 +328,6 @@ class TiKVDocumentStoreTests {
         }
 
         commitThread.join()
-        committer.close()
 
         val document1 = store.getDocument(ids[0])
         val document2 = store.getDocument(ids[1])
@@ -345,6 +335,52 @@ class TiKVDocumentStoreTests {
         assertDocument(document1, ids[0], JSON_1, 1)
         assertDocument(document2, ids[1], JSON_3, 2)
         assertEquals(ids[1], exception.id)
+    }
+
+    @Test
+    fun updateDocuments_multipleDocumentsConcurrentTransactionRollback() = runBlocking {
+        updateDocument(ids[0], JSON_1, 0)
+        updateDocument(ids[1], JSON_2, 0)
+
+        // The update locks the first document, then its write to the second document conflicts
+        val commitThread: Thread = commitConcurrently(parseDocument(ids[1], JSON_3, 1))
+
+        assertThrows<UpdateConflictException> {
+            store.updateDocuments(
+                parseDocument(ids[0], JSON_3, 1),
+                parseDocument(ids[1], JSON_1, 1),
+            )
+        }
+
+        commitThread.join()
+
+        // The lock on the first document has been rolled back, so writing it doesn't wait for the lock to expire
+        val key: ByteArray = keyMapper.fromDocumentKey(ids[0])
+        val value: ByteArray = valueMapper.fromDocument(parseDocument(ids[0], JSON_3, 1))
+        TwoPhaseCommitter(session, session.timestamp.version).use { committer ->
+            committer.prewritePrimaryKey(ConcreteBackOffer.newCustomBackOff(500), key, value)
+            committer.commitPrimaryKey(ConcreteBackOffer.newCustomBackOff(500), key, session.timestamp.version)
+        }
+
+        val document = store.getDocument(ids[0])
+
+        assertDocument(document, ids[0], JSON_3, 2)
+    }
+
+    /**
+     * Prewrites a document in a concurrent transaction, then commits it after one second from a background thread.
+     */
+    private fun commitConcurrently(document: Document): Thread {
+        val key: ByteArray = keyMapper.fromDocumentKey(document.id)
+        val committer = TwoPhaseCommitter(session, session.timestamp.version)
+        committer.prewritePrimaryKey(ConcreteBackOffer.newCustomBackOff(5000), key, valueMapper.fromDocument(document))
+
+        return thread {
+            Thread.sleep(1000)
+            val commitTs: TiTimestamp = session.timestamp
+            committer.commitPrimaryKey(ConcreteBackOffer.newCustomBackOff(5000), key, commitTs.version)
+            committer.close()
+        }
     }
 
     //endregion
