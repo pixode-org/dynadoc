@@ -3,7 +3,6 @@ package org.pixode.dynadoc.tikv
 import java.net.URI
 import java.util.UUID
 import java.util.stream.Stream
-import kotlin.concurrent.thread
 import kotlinx.coroutines.flow.toList
 import kotlinx.coroutines.runBlocking
 import org.junit.jupiter.api.AfterAll
@@ -309,26 +308,23 @@ class TiKVDocumentStoreTests {
         updateDocument(ids[0], JSON_1, 0)
         updateDocument(ids[1], JSON_2, 0)
 
-        // Start a concurrent transaction writing the second document, and commit it after the start of the update.
         // The update reads the second document at its initial version, but finds it locked by the concurrent
-        // transaction when writing it.
-        val commitThread: Thread = commitConcurrently(parseDocument(ids[1], JSON_3, 1))
-
-        val exception = assertThrows<UpdateConflictException> {
-            if (checkOnly) {
-                store.updateDocuments(
-                    updatedDocuments = listOf(parseDocument(ids[0], JSON_3, 1)),
-                    checkedDocuments = listOf(parseDocument(ids[1], JSON_1, 1)),
-                )
-            } else {
-                store.updateDocuments(
-                    parseDocument(ids[0], JSON_3, 1),
-                    parseDocument(ids[1], JSON_1, 1),
-                )
+        // transaction when writing it
+        val exception = withConcurrentTransaction(parseDocument(ids[1], JSON_3, 1)) {
+            assertThrows<UpdateConflictException> {
+                if (checkOnly) {
+                    store.updateDocuments(
+                        updatedDocuments = listOf(parseDocument(ids[0], JSON_3, 1)),
+                        checkedDocuments = listOf(parseDocument(ids[1], JSON_1, 1)),
+                    )
+                } else {
+                    store.updateDocuments(
+                        parseDocument(ids[0], JSON_3, 1),
+                        parseDocument(ids[1], JSON_1, 1),
+                    )
+                }
             }
         }
-
-        commitThread.join()
 
         val document1 = store.getDocument(ids[0])
         val document2 = store.getDocument(ids[1])
@@ -343,66 +339,73 @@ class TiKVDocumentStoreTests {
         updateDocument(ids[0], JSON_1, 0)
         updateDocument(ids[1], JSON_2, 0)
 
-        // The update locks the first document, then its write to the second document conflicts
-        val commitThread: Thread = commitConcurrently(parseDocument(ids[1], JSON_3, 1))
-
-        assertThrows<UpdateConflictException> {
-            store.updateDocuments(
-                parseDocument(ids[0], JSON_3, 1),
-                parseDocument(ids[1], JSON_1, 1),
-            )
+        // The update locks the first document, then finds the second document locked by the concurrent transaction
+        withConcurrentTransaction(parseDocument(ids[1], JSON_3, 1)) {
+            assertThrows<UpdateConflictException> {
+                store.updateDocuments(
+                    parseDocument(ids[0], JSON_3, 1),
+                    parseDocument(ids[1], JSON_1, 1),
+                )
+            }
         }
 
-        commitThread.join()
+        // The failed update has not modified the first document
+        val documentAfterUpdate = store.getDocument(ids[0])
 
         // The lock on the first document has been rolled back, so writing it doesn't wait for the lock to expire
         val key: ByteArray = keyMapper.fromDocumentKey(ids[0])
-        val value: ByteArray = valueMapper.fromDocument(parseDocument(ids[0], JSON_3, 1))
+        val value: ByteArray = valueMapper.fromDocument(parseDocument(ids[0], JSON_2, 1))
         TwoPhaseCommitter(session, session.timestamp.version).use { committer ->
             committer.prewritePrimaryKey(ConcreteBackOffer.newCustomBackOff(500), key, value)
             committer.commitPrimaryKey(ConcreteBackOffer.newCustomBackOff(500), key, session.timestamp.version)
         }
 
-        val document = store.getDocument(ids[0])
+        val documentAfterWrite = store.getDocument(ids[0])
 
-        assertDocument(document, ids[0], JSON_3, 2)
+        assertDocument(documentAfterUpdate, ids[0], JSON_1, 1)
+        assertDocument(documentAfterWrite, ids[0], JSON_2, 2)
     }
 
     @Test
     fun updateDocuments_lockedDocument() = runBlocking {
         updateDocument(ids[0], JSON_1, 0)
 
-        val commitThread: Thread = commitConcurrently(parseDocument(ids[0], JSON_3, 1))
-
-        val exception = assertThrows<UpdateConflictException> {
-            store.updateDocuments(parseDocument(ids[0], JSON_2, 1))
+        // The concurrent transaction only commits after the update returns, so the update fails without waiting for it
+        val exception = withConcurrentTransaction(parseDocument(ids[0], JSON_3, 1)) {
+            assertThrows<UpdateConflictException> {
+                store.updateDocuments(parseDocument(ids[0], JSON_2, 1))
+            }
         }
-
-        // The update has failed without waiting for the concurrent transaction to commit
-        val committedBeforeFailure: Boolean = !commitThread.isAlive
-        commitThread.join()
 
         val document = store.getDocument(ids[0])
 
-        assertEquals(false, committedBeforeFailure)
         assertEquals(ids[0], exception.id)
         // The lock of the concurrent transaction has not been rolled back by the failed update
         assertDocument(document, ids[0], JSON_3, 2)
     }
 
     /**
-     * Prewrites a document in a concurrent transaction, then commits it after one second from a background thread.
+     * Executes [block] while a concurrent transaction writing [document] is in progress: the document is locked by the
+     * concurrent transaction before [block] is executed, and the concurrent transaction is committed after [block]
+     * completes successfully.
      */
-    private fun commitConcurrently(document: Document): Thread {
+    private inline fun <T> withConcurrentTransaction(document: Document, block: () -> T): T {
         val key: ByteArray = keyMapper.fromDocumentKey(document.id)
-        val committer = TwoPhaseCommitter(session, session.timestamp.version)
-        committer.prewritePrimaryKey(ConcreteBackOffer.newCustomBackOff(5000), key, valueMapper.fromDocument(document))
 
-        return thread {
-            Thread.sleep(1000)
+        // The lock has a TTL of one hour, so it can't expire during the test
+        return TwoPhaseCommitter(session, session.timestamp.version).use { committer ->
+            committer.prewritePrimaryKey(
+                ConcreteBackOffer.newCustomBackOff(5000),
+                key,
+                valueMapper.fromDocument(document),
+            )
+
+            val result: T = block()
+
             val commitTs: TiTimestamp = session.timestamp
             committer.commitPrimaryKey(ConcreteBackOffer.newCustomBackOff(5000), key, commitTs.version)
-            committer.close()
+
+            result
         }
     }
 
