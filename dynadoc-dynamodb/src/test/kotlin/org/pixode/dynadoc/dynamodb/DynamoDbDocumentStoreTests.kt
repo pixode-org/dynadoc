@@ -34,6 +34,9 @@ import org.testcontainers.junit.jupiter.Testcontainers
 private const val JSON_1 = """ {"abc":"def"} """
 private const val JSON_2 = """ {"ghi":"jkl"} """
 private const val JSON_3 = """ {"mno":"pqr"} """
+private const val JSON_4 = """ {"stu":"vwx"} """
+private const val JSON_5 = """ {"yza":"bcd"} """
+private const val JSON_6 = """ {"efg":"hij"} """
 private val JSON_1MB = """ {"key":"${"a".repeat(1024 * 1024)}"} """
 private val STRING_100KB = "a".repeat(100 * 1024)
 
@@ -148,7 +151,7 @@ class DynamoDbDocumentStoreTests {
             if (checkOnly) {
                 checkDocument(10)
             } else {
-                updateDocument(JSON_2, 10)
+                updateDocument(JSON_1, 10)
             }
         }
 
@@ -214,12 +217,12 @@ class DynamoDbDocumentStoreTests {
 
         store.updateDocuments(
             updatedDocuments = listOf(
-                parseDocument(ids[0], """ {"v":"1"} """, 1),
-                parseDocument(ids[2], """ {"v":"2"} """, 0),
+                parseDocument(ids[0], JSON_3, 1),
+                parseDocument(ids[2], JSON_4, 0),
             ),
             checkedDocuments = listOf(
-                parseDocument(ids[1], """ {"v":"3"} """, 1),
-                parseDocument(ids[3], """ {"v":"4"} """, 0),
+                parseDocument(ids[1], JSON_5, 1),
+                parseDocument(ids[3], JSON_6, 0),
             ),
         )
 
@@ -228,9 +231,9 @@ class DynamoDbDocumentStoreTests {
         val document3 = store.getDocument(ids[2])
         val document4 = store.getDocument(ids[3])
 
-        assertDocument(document1, ids[0], """ {"v":"1"} """, 2)
+        assertDocument(document1, ids[0], JSON_3, 2)
         assertDocument(document2, ids[1], JSON_2, 1)
-        assertDocument(document3, ids[2], """ {"v":"2"} """, 1)
+        assertDocument(document3, ids[2], JSON_4, 1)
         assertDocument(document4, ids[3], null, 0)
     }
 

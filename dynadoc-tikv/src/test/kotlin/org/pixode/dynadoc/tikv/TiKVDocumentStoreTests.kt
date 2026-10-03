@@ -33,6 +33,9 @@ import org.tikv.txn.TwoPhaseCommitter
 private const val JSON_1 = """ {"abc":"def"} """
 private const val JSON_2 = """ {"ghi":"jkl"} """
 private const val JSON_3 = """ {"mno":"pqr"} """
+private const val JSON_4 = """ {"stu":"vwx"} """
+private const val JSON_5 = """ {"yza":"bcd"} """
+private const val JSON_6 = """ {"efg":"hij"} """
 
 class TiKVDocumentStoreTests {
     private val store: TiKVDocumentStore = TiKVDocumentStore(session, NAMESPACE)
@@ -152,7 +155,7 @@ class TiKVDocumentStoreTests {
             if (checkOnly) {
                 checkDocument(10)
             } else {
-                updateDocument(JSON_2, 10)
+                updateDocument(JSON_1, 10)
             }
         }
 
@@ -222,12 +225,12 @@ class TiKVDocumentStoreTests {
 
         store.updateDocuments(
             updatedDocuments = listOf(
-                parseDocument(ids[0], """ {"v":"1"} """, 1),
-                parseDocument(ids[2], """ {"v":"2"} """, 0),
+                parseDocument(ids[0], JSON_3, 1),
+                parseDocument(ids[2], JSON_4, 0),
             ),
             checkedDocuments = listOf(
-                parseDocument(ids[1], """ {"v":"3"} """, 1),
-                parseDocument(ids[3], """ {"v":"4"} """, 0),
+                parseDocument(ids[1], JSON_5, 1),
+                parseDocument(ids[3], JSON_6, 0),
             ),
         )
 
@@ -236,9 +239,9 @@ class TiKVDocumentStoreTests {
         val document3 = store.getDocument(ids[2])
         val document4 = store.getDocument(ids[3])
 
-        assertDocument(document1, ids[0], """ {"v":"1"} """, 2)
+        assertDocument(document1, ids[0], JSON_3, 2)
         assertDocument(document2, ids[1], JSON_2, 1)
-        assertDocument(document3, ids[2], """ {"v":"2"} """, 1)
+        assertDocument(document3, ids[2], JSON_4, 1)
         assertDocument(document4, ids[3], null, 0)
     }
 
@@ -248,7 +251,7 @@ class TiKVDocumentStoreTests {
 
         store.updateDocuments(
             updatedDocuments = listOf(parseDocument(ids[0], JSON_2, 1)),
-            checkedDocuments = listOf(parseDocument(ids[0], JSON_1, 1)),
+            checkedDocuments = listOf(parseDocument(ids[0], JSON_3, 1)),
         )
 
         val document = store.getDocument(ids[0])
@@ -285,11 +288,11 @@ class TiKVDocumentStoreTests {
 
     @Test
     fun updateDocuments_multipleDocumentsCheckExistingConflict() = runBlocking {
-        updateDocument(ids[1], JSON_2, 0)
+        updateDocument(ids[1], JSON_1, 0)
 
         val exception = assertThrows<UpdateConflictException> {
             store.updateDocuments(
-                updatedDocuments = listOf(parseDocument(ids[0], JSON_1, 0)),
+                updatedDocuments = listOf(parseDocument(ids[0], JSON_2, 0)),
                 checkedDocuments = listOf(parseDocument(ids[1], JSON_3, 0)),
             )
         }
@@ -298,7 +301,7 @@ class TiKVDocumentStoreTests {
         val document2 = store.getDocument(ids[1])
 
         assertDocument(document1, ids[0], null, 0)
-        assertDocument(document2, ids[1], JSON_2, 1)
+        assertDocument(document2, ids[1], JSON_1, 1)
         assertEquals(ids[1], exception.id)
     }
 
@@ -314,13 +317,13 @@ class TiKVDocumentStoreTests {
             assertThrows<UpdateConflictException> {
                 if (checkOnly) {
                     store.updateDocuments(
-                        updatedDocuments = listOf(parseDocument(ids[0], JSON_3, 1)),
-                        checkedDocuments = listOf(parseDocument(ids[1], JSON_1, 1)),
+                        updatedDocuments = listOf(parseDocument(ids[0], JSON_4, 1)),
+                        checkedDocuments = listOf(parseDocument(ids[1], JSON_5, 1)),
                     )
                 } else {
                     store.updateDocuments(
-                        parseDocument(ids[0], JSON_3, 1),
-                        parseDocument(ids[1], JSON_1, 1),
+                        parseDocument(ids[0], JSON_4, 1),
+                        parseDocument(ids[1], JSON_5, 1),
                     )
                 }
             }
@@ -334,36 +337,35 @@ class TiKVDocumentStoreTests {
         assertEquals(ids[1], exception.id)
     }
 
-    @Test
-    fun updateDocuments_multipleDocumentsConcurrentTransactionRollback() = runBlocking {
+    @ParameterizedTest
+    @ValueSource(booleans = [true, false])
+    fun updateDocuments_multipleDocumentsConcurrentTransactionRollback(checkOnly: Boolean) = runBlocking {
         updateDocument(ids[0], JSON_1, 0)
         updateDocument(ids[1], JSON_2, 0)
 
         // The update locks the first document, then finds the second document locked by the concurrent transaction
         withConcurrentTransaction(parseDocument(ids[1], JSON_3, 1)) {
             assertThrows<UpdateConflictException> {
-                store.updateDocuments(
-                    parseDocument(ids[0], JSON_3, 1),
-                    parseDocument(ids[1], JSON_1, 1),
-                )
+                if (checkOnly) {
+                    store.updateDocuments(
+                        updatedDocuments = listOf(parseDocument(ids[0], JSON_4, 1)),
+                        checkedDocuments = listOf(parseDocument(ids[1], JSON_5, 1)),
+                    )
+                } else {
+                    store.updateDocuments(
+                        parseDocument(ids[0], JSON_4, 1),
+                        parseDocument(ids[1], JSON_5, 1),
+                    )
+                }
             }
         }
 
-        // The failed update has not modified the first document
-        val documentAfterUpdate = store.getDocument(ids[0])
+        // The lock on the first document has been rolled back, so it can be updated
+        updateDocument(ids[0], JSON_6, 1)
 
-        // The lock on the first document has been rolled back, so writing it doesn't wait for the lock to expire
-        val key: ByteArray = keyMapper.fromDocumentKey(ids[0])
-        val value: ByteArray = valueMapper.fromDocument(parseDocument(ids[0], JSON_2, 1))
-        TwoPhaseCommitter(session, session.timestamp.version).use { committer ->
-            committer.prewritePrimaryKey(ConcreteBackOffer.newCustomBackOff(500), key, value)
-            committer.commitPrimaryKey(ConcreteBackOffer.newCustomBackOff(500), key, session.timestamp.version)
-        }
+        val document = store.getDocument(ids[0])
 
-        val documentAfterWrite = store.getDocument(ids[0])
-
-        assertDocument(documentAfterUpdate, ids[0], JSON_1, 1)
-        assertDocument(documentAfterWrite, ids[0], JSON_2, 2)
+        assertDocument(document, ids[0], JSON_6, 2)
     }
 
     @Test
@@ -371,9 +373,9 @@ class TiKVDocumentStoreTests {
         updateDocument(ids[0], JSON_1, 0)
 
         // The concurrent transaction only commits after the update returns, so the update fails without waiting for it
-        val exception = withConcurrentTransaction(parseDocument(ids[0], JSON_3, 1)) {
+        val exception = withConcurrentTransaction(parseDocument(ids[0], JSON_2, 1)) {
             assertThrows<UpdateConflictException> {
-                store.updateDocuments(parseDocument(ids[0], JSON_2, 1))
+                store.updateDocuments(parseDocument(ids[0], JSON_3, 1))
             }
         }
 
@@ -381,7 +383,7 @@ class TiKVDocumentStoreTests {
 
         assertEquals(ids[0], exception.id)
         // The lock of the concurrent transaction has not been rolled back by the failed update
-        assertDocument(document, ids[0], JSON_3, 2)
+        assertDocument(document, ids[0], JSON_2, 2)
     }
 
     /**

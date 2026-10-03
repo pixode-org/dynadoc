@@ -37,6 +37,9 @@ import org.testcontainers.mongodb.MongoDBContainer
 private const val JSON_1 = """ {"abc":"def"} """
 private const val JSON_2 = """ {"ghi":"jkl"} """
 private const val JSON_3 = """ {"mno":"pqr"} """
+private const val JSON_4 = """ {"stu":"vwx"} """
+private const val JSON_5 = """ {"yza":"bcd"} """
+private const val JSON_6 = """ {"efg":"hij"} """
 private val JSON_17MB = """ {"key":"${"a".repeat(17 * 1024 * 1024)}"} """
 private val JSON_TOO_DEEP = """ {"key":${"{\"a\":".repeat(200)}1${"}".repeat(200)}} """
 private const val JSON_DOLLAR_FIELD = """ {"${'$'}key":"value"} """
@@ -152,7 +155,7 @@ class MongoDbDocumentStoreTests {
             if (checkOnly) {
                 checkDocument(10)
             } else {
-                updateDocument(JSON_2, 10)
+                updateDocument(JSON_1, 10)
             }
         }
 
@@ -230,12 +233,12 @@ class MongoDbDocumentStoreTests {
 
         store.updateDocuments(
             updatedDocuments = listOf(
-                parseDocument(ids[0], """ {"v":"1"} """, 1),
-                parseDocument(ids[2], """ {"v":"2"} """, 0),
+                parseDocument(ids[0], JSON_3, 1),
+                parseDocument(ids[2], JSON_4, 0),
             ),
             checkedDocuments = listOf(
-                parseDocument(ids[1], """ {"v":"3"} """, 1),
-                parseDocument(ids[3], """ {"v":"4"} """, 0),
+                parseDocument(ids[1], JSON_5, 1),
+                parseDocument(ids[3], JSON_6, 0),
             ),
         )
 
@@ -244,9 +247,9 @@ class MongoDbDocumentStoreTests {
         val document3 = store.getDocument(ids[2])
         val document4 = store.getDocument(ids[3])
 
-        assertDocument(document1, ids[0], """ {"v":"1"} """, 2)
+        assertDocument(document1, ids[0], JSON_3, 2)
         assertDocument(document2, ids[1], JSON_2, 1)
-        assertDocument(document3, ids[2], """ {"v":"2"} """, 1)
+        assertDocument(document3, ids[2], JSON_4, 1)
         assertDocument(document4, ids[3], null, 0)
     }
 
@@ -279,11 +282,11 @@ class MongoDbDocumentStoreTests {
 
     @Test
     fun updateDocuments_multipleDocumentsCheckExistingConflict() = runBlocking {
-        updateDocument(ids[1], JSON_2, 0)
+        updateDocument(ids[1], JSON_1, 0)
 
         val exception = assertThrows<UpdateConflictException> {
             store.updateDocuments(
-                updatedDocuments = listOf(parseDocument(ids[0], JSON_1, 0)),
+                updatedDocuments = listOf(parseDocument(ids[0], JSON_2, 0)),
                 checkedDocuments = listOf(parseDocument(ids[1], JSON_3, 0)),
             )
         }
@@ -292,7 +295,7 @@ class MongoDbDocumentStoreTests {
         val document2 = store.getDocument(ids[1])
 
         assertDocument(document1, ids[0], null, 0)
-        assertDocument(document2, ids[1], JSON_2, 1)
+        assertDocument(document2, ids[1], JSON_1, 1)
         assertEquals(ids[1], exception.id)
     }
 
@@ -313,7 +316,7 @@ class MongoDbDocumentStoreTests {
             assertThrows<UpdateConflictException> {
                 store.updateDocuments(
                     parseDocument(ids[0], JSON_3, 1),
-                    parseDocument(ids[1], JSON_3, 1),
+                    parseDocument(ids[1], JSON_4, 1),
                 )
             }
 
@@ -334,12 +337,12 @@ class MongoDbDocumentStoreTests {
             session.startTransaction()
             client.getDatabase(DATABASE).getCollection<BsonDocument>(COLLECTION).insertOne(
                 clientSession = session,
-                document = bsonMapper.fromDocument(parseDocument(ids[1], JSON_2, 0)),
+                document = bsonMapper.fromDocument(parseDocument(ids[1], JSON_1, 0)),
             )
 
             assertThrows<UpdateConflictException> {
                 store.updateDocuments(
-                    parseDocument(ids[0], JSON_1, 0),
+                    parseDocument(ids[0], JSON_2, 0),
                     parseDocument(ids[1], JSON_3, 0),
                 )
             }
