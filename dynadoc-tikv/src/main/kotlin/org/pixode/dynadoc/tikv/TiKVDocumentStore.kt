@@ -46,7 +46,8 @@ private const val ROLLBACK_MAX_BACKOFF_MS = 5000
  *
  * Updates rely on TiKV optimistic transactions: the documents are read at the start timestamp of the transaction to
  * check their versions, then written using the two-phase commit protocol, which fails if any of them has been
- * written by another transaction since the start timestamp.
+ * written by another transaction since the start timestamp. An update also fails without waiting if any of the
+ * documents is locked by a concurrent update.
  */
 class TiKVDocumentStore(
     private val session: TiSession,
@@ -101,13 +102,17 @@ class TiKVDocumentStore(
 
         try {
             // The primary key is written first, as the status of the transaction is determined by its lock
-            prewrite(backOffer, primaryKey, listOf(mutations.getValue(primaryKey)), startTs)
-            prewrite(backOffer, primaryKey, mutations.values.drop(1), startTs)
+            val prewriteBackOffer = NoLockWaitBackOffer(backOffer)
+            prewrite(prewriteBackOffer, primaryKey, listOf(mutations.getValue(primaryKey)), startTs)
+            prewrite(prewriteBackOffer, primaryKey, mutations.values.drop(1), startTs)
         } catch (exception: RuntimeException) {
             // The primary key is not committed, so the transaction can be abandoned
             rollback(mutations.keys.toList(), startTs)
 
-            if (isWriteConflict(exception)) {
+            if (exception is LockedKeyException) {
+                val index: Int = keys.indexOf(exception.key)
+                throw UpdateConflictException(documents[maxOf(index, 0)].id)
+            } else if (isWriteConflict(exception)) {
                 throw UpdateConflictException(findConflict(documents, keys, currentValues))
             } else {
                 throw exception
@@ -144,6 +149,35 @@ class TiKVDocumentStore(
             session.regionStoreClientBuilder.build(region, store)
                 .commit(backOffer, regionKeys, startTs.version, commitTs.version)
         }
+
+    /**
+     * A [BackOffer] that fails with a [LockedKeyException] instead of waiting for a lock during a prewrite.
+     *
+     * The client only waits for a lock after resolving the locks of committed, rolled back or expired transactions, so
+     * the remaining lock belongs to a concurrent transaction that is still running. That transaction is most likely to
+     * commit, in which case this transaction would fail with a write conflict anyway, after waiting for it with an
+     * exponential backoff.
+     */
+    private class NoLockWaitBackOffer(private val backOffer: BackOffer) : BackOffer by backOffer {
+        override fun doBackOffWithMaxSleep(
+            funcType: BackOffFunction.BackOffFuncType,
+            maxSleepMs: Long,
+            err: Exception,
+        ) {
+            if (funcType == BackOffFunction.BackOffFuncType.BoTxnLock) {
+                val keyError: Kvrpcpb.KeyError? = (err as? KeyException)?.keyErr
+                throw LockedKeyException(if (keyError?.hasLocked() == true) keyError.locked.key else null, err)
+            }
+
+            backOffer.doBackOffWithMaxSleep(funcType, maxSleepMs, err)
+        }
+    }
+
+    /**
+     * Indicates that a prewrite has found a key locked by a concurrent transaction.
+     */
+    private class LockedKeyException(val key: ByteString?, cause: Exception) :
+        RuntimeException("The key is locked by a concurrent transaction", cause)
 
     /**
      * Rolls back the locks of an abandoned transaction, so that other transactions don't wait for them to expire.
@@ -279,18 +313,22 @@ class TiKVDocumentStore(
     }
 
     private fun getMultipleDocuments(idList: List<DocumentKey>): Flow<Document> = flow {
-        val keys: List<ByteString> = idList.map { ByteString.copyFrom(keyMapper.fromDocumentKey(it)) }
-        val values: Map<ByteString, ByteString> = batchGet(keys.distinct(), session.timestamp)
+        data class RawDocumentKey(val documentKey: DocumentKey, val rawBytes: ByteString)
 
-        for ((id, key) in idList.zip(keys)) {
-            val value: ByteString? = values[key]
+        val keys: List<RawDocumentKey> = idList.map {
+            RawDocumentKey(it, ByteString.copyFrom(keyMapper.fromDocumentKey(it)))
+        }
+        val values: Map<ByteString, ByteString> = batchGet(keys.map { it.rawBytes }.distinct(), session.timestamp)
+
+        for ((documentKey, rawBytes) in keys) {
+            val value: ByteString? = values[rawBytes]
 
             if (value == null) {
-                emit(Document(id, null, 0))
+                emit(Document(documentKey, null, 0))
             } else {
                 val document: Document = valueMapper.toDocument(value.toByteArray())
-                check(document.id == id) {
-                    "The document $id has the same TiKV key as the document ${document.id}"
+                check(document.id == documentKey) {
+                    "The document $documentKey has the same TiKV key as the document ${document.id}"
                 }
                 emit(document)
             }

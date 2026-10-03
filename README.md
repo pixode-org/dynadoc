@@ -336,6 +336,8 @@ The namespace isolates the documents of a store from the other data of the clust
 
 Updates are optimistic transactions: the documents are read at the start timestamp of the transaction to check their versions, then written using the two-phase commit protocol. Checked documents are locked without being modified, so that a concurrent write to any of the documents causes an `UpdateConflictException`.
 
+An update that finds one of its documents locked by another update still in progress fails immediately with an `UpdateConflictException`, rather than waiting for the other update to complete. Locks left by updates that were committed, rolled back or have expired are resolved first, so they don't cause a conflict. Under contention, using a `RetryPolicy` with `transaction` retries the update with fresh versions of the documents.
+
 The documents of a partition can be retrieved, sorted by local key, using the `scan` method. The range of local keys is optional, with an inclusive start and an exclusive end:
 
 ```kotlin

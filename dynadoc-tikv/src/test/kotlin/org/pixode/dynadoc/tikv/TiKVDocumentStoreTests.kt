@@ -310,7 +310,8 @@ class TiKVDocumentStoreTests {
         updateDocument(ids[1], JSON_2, 0)
 
         // Start a concurrent transaction writing the second document, and commit it after the start of the update.
-        // The update reads the second document at its initial version, but its write conflicts with the commit.
+        // The update reads the second document at its initial version, but finds it locked by the concurrent
+        // transaction when writing it.
         val commitThread: Thread = commitConcurrently(parseDocument(ids[1], JSON_3, 1))
 
         val exception = assertThrows<UpdateConflictException> {
@@ -364,6 +365,28 @@ class TiKVDocumentStoreTests {
 
         val document = store.getDocument(ids[0])
 
+        assertDocument(document, ids[0], JSON_3, 2)
+    }
+
+    @Test
+    fun updateDocuments_lockedDocument() = runBlocking {
+        updateDocument(ids[0], JSON_1, 0)
+
+        val commitThread: Thread = commitConcurrently(parseDocument(ids[0], JSON_3, 1))
+
+        val exception = assertThrows<UpdateConflictException> {
+            store.updateDocuments(parseDocument(ids[0], JSON_2, 1))
+        }
+
+        // The update has failed without waiting for the concurrent transaction to commit
+        val committedBeforeFailure: Boolean = !commitThread.isAlive
+        commitThread.join()
+
+        val document = store.getDocument(ids[0])
+
+        assertEquals(false, committedBeforeFailure)
+        assertEquals(ids[0], exception.id)
+        // The lock of the concurrent transaction has not been rolled back by the failed update
         assertDocument(document, ids[0], JSON_3, 2)
     }
 
