@@ -10,4 +10,5 @@ include(
     "dynadoc-dynamodb",
     "dynadoc-mongodb",
     "dynadoc-tikv",
+    "dynadoc-yugabytedb",
 )

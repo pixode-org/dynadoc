@@ -2,7 +2,7 @@
 
 <a href="https://central.sonatype.com/artifact/org.pixode/dynadoc">![Maven Central Version](https://img.shields.io/maven-central/v/org.pixode/dynadoc)</a>
 
-Dynadoc is a Kotlin library for using DynamoDB, MongoDB or TiKV as a JSON document store. It manages the mapping between Kotlin objects and JSON documents.
+Dynadoc is a Kotlin library for using DynamoDB, MongoDB, TiKV or YugabyteDB as a JSON document store. It manages the mapping between Kotlin objects and JSON documents.
 
 ## Concepts
 
@@ -35,6 +35,26 @@ With TiKV, each document is stored as a single key-value pair:
 - The value is a UTF-8 encoded JSON object of the form `{ partition_key, local_key, version, body }`, where `partition_key` and `local_key` hold the partition key and local key, `version` the version of the document and `body` the JSON document. Since the body is nested, there are no reserved field names.
 
 Deleted documents are kept with a `null` body so that their version is preserved. TiKV transactions don't support TTLs, so they are never removed automatically.
+
+### YugabyteDB mapping
+
+With YugabyteDB, each document is stored as a row of a YSQL table with the following schema:
+
+```sql
+CREATE TABLE documents (
+    partition_key TEXT COLLATE "C" NOT NULL,
+    local_key TEXT COLLATE "C" NOT NULL,
+    version BIGINT NOT NULL,
+    body JSONB,
+    PRIMARY KEY (partition_key ASC, local_key ASC)
+);
+```
+
+- `partition_key` and `local_key` hold the partition key and the local key. The primary key is range-sharded on both columns, so the documents of a partition are stored together and sorted by local key, and a large partition can be split across several tablets. The `C` collation sorts keys by their UTF-8 encoding, regardless of the locale of the database.
+- `version` is an integer representing the version of the document, for optimistic concurrency management purposes.
+- `body` holds the JSON document. Since the body has its own column, there are no reserved field names.
+
+Deleted documents are kept with a `NULL` body so that their version is preserved. YSQL doesn't support TTLs, so they are never removed automatically.
 
 ### The `JsonEntity<T>` type
 
@@ -82,6 +102,8 @@ The core `dynadoc` library does not depend on the AWS SDK. `DynamoDbDocumentStor
 To use MongoDB instead, add a dependency to [dynadoc-mongodb](https://central.sonatype.com/artifact/org.pixode/dynadoc-mongodb), which references the MongoDB Kotlin coroutine driver. `MongoDbDocumentStore` is in the `org.pixode.dynadoc.mongodb` package. See [Using MongoDB](#using-mongodb).
 
 To use TiKV, add a dependency to `dynadoc-tikv`, which references the TiKV Java client. `TiKVDocumentStore` is in the `org.pixode.dynadoc.tikv` package. See [Using TiKV](#using-tikv).
+
+To use YugabyteDB, add a dependency to `dynadoc-yugabytedb`, which references the R2DBC SPI. `YugabyteDbDocumentStore` is in the `org.pixode.dynadoc.yugabytedb` package. See [Using YugabyteDB](#using-yugabytedb).
 
 **Note:** The [dynadoc-jackson](https://central.sonatype.com/artifact/org.pixode/dynadoc-jackson) library is also provided to allow using Jackson as the JSON serializer instead of kotlinx.serialization. It is not required to use the core library, and can be added as an optional dependency.
 
@@ -347,6 +369,73 @@ val entities: Flow<JsonEntity<Product?>> = result.map(DefaultJsonSerializer::fro
 ```
 
 Reads use a snapshot at the latest timestamp, so they are strongly consistent.
+
+## Using YugabyteDB
+
+`YugabyteDbDocumentStore` implements the same `DocumentStore` interface, using the YSQL API of YugabyteDB through R2DBC.
+
+```kotlin
+val connectionFactory: ConnectionFactory =
+    ConnectionFactories.get("r2dbc:postgresql://user:password@host:5433/database")
+
+val documentStore = YugabyteDbDocumentStore(connectionFactory, "documents")
+
+// Create the table, range-sharded by partition key then local key
+documentStore.createTable()
+
+val entityStore = EntityStore(documentStore, DefaultJsonSerializer)
+```
+
+The module only depends on the R2DBC SPI, so an R2DBC driver must be added to the project: either the PostgreSQL driver (`org.postgresql:r2dbc-postgresql`), or the [YugabyteDB smart driver](https://docs.yugabyte.com/stable/drivers-orms/java/yb-r2dbc/) (`com.yugabyte:r2dbc-postgresql`), which balances connections across the nodes of the cluster. Every operation takes a connection from the `ConnectionFactory` and closes it when it completes, so a connection pool such as `r2dbc-pool` should be used.
+
+The table name can be qualified with a schema, as in `"schema.documents"`.
+
+### Tablets
+
+A range-sharded table starts with a single tablet, which YugabyteDB splits automatically as the table grows. When the distribution of the partition keys is known, the table can be split from the start by passing the partition keys at which to split it:
+
+```kotlin
+documentStore.createTable(splitAt = listOf("g", "n", "t"))
+```
+
+Since documents are stored in key order, partition keys that keep increasing, such as timestamps or sequence numbers, send all the new documents to the last tablet. Partition keys should be spread across the key space, for example by using random identifiers.
+
+### Concurrency
+
+Updating a single document is a single statement. Updating multiple documents atomically (for example with `EntityStore.transaction`) relies on a Read Committed transaction: the rows of the documents are locked, their versions are checked, then the updated documents are written. Checked documents are locked without being modified, so that a concurrent write to any of the documents causes an `UpdateConflictException`.
+
+An update that finds one of its documents locked by another update still in progress fails immediately with an `UpdateConflictException`, rather than waiting for the other update to complete. This relies on the Read Committed isolation level and on wait queues, which are enabled by default in recent versions of YugabyteDB (`yb_enable_read_committed_isolation` and `enable_wait_queues`). Without them, updates remain atomic and conflicts are still detected, but an update may wait for the other one to complete. Under contention, using a `RetryPolicy` with `transaction` retries the update with fresh versions of the documents.
+
+The only case in which an update waits is when another update in progress is creating the same document, as there is no row to lock yet. It then fails with an `UpdateConflictException` if the other update is committed.
+
+### Queries
+
+The documents of a partition can be retrieved, sorted by local key, using the `scan` method. The range of local keys is optional, with an inclusive start and an exclusive end:
+
+```kotlin
+val result = documentStore.scan("products", startLocalKey = "A", endLocalKey = "M")
+
+val entities: Flow<JsonEntity<Product?>> = result.map(DefaultJsonSerializer::fromDocument)
+```
+
+Custom queries can be performed using the `query` method, which takes the condition of a `WHERE` clause and the values of its parameters. The condition can refer to the columns of the table, and use the [JSON operators](https://docs.yugabyte.com/stable/api/ysql/datatypes/type_json/functions-operators/) on the `body` column:
+
+```kotlin
+val result = documentStore.query(
+    "partition_key = $1 AND (body->>'price')::numeric BETWEEN $2 AND $3 ORDER BY local_key",
+    "products",
+    100,
+    250,
+)
+```
+
+Both methods include deleted documents, which have a `NULL` body. They can be excluded from a query by adding `body IS NOT NULL` to the condition.
+
+Queries on the fields of the body that don't specify the partition key read the whole table, unless an index is created on these fields:
+
+```sql
+CREATE INDEX documents_price ON documents (((body->>'price')::numeric) ASC);
+```
 
 ## License
 

@@ -1,0 +1,840 @@
+package org.pixode.dynadoc.yugabytedb
+
+import io.r2dbc.spi.Connection
+import io.r2dbc.spi.ConnectionFactories
+import io.r2dbc.spi.ConnectionFactory
+import io.r2dbc.spi.R2dbcException
+import java.util.UUID
+import java.util.concurrent.TimeUnit
+import java.util.stream.Stream
+import kotlinx.coroutines.Deferred
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.async
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.toList
+import kotlinx.coroutines.reactive.awaitFirstOrNull
+import kotlinx.coroutines.reactive.awaitSingle
+import kotlinx.coroutines.runBlocking
+import org.junit.jupiter.api.Assertions.assertEquals
+import org.junit.jupiter.api.Assertions.assertInstanceOf
+import org.junit.jupiter.api.Assertions.assertTrue
+import org.junit.jupiter.api.BeforeAll
+import org.junit.jupiter.api.Test
+import org.junit.jupiter.api.Timeout
+import org.junit.jupiter.api.assertThrows
+import org.junit.jupiter.params.ParameterizedTest
+import org.junit.jupiter.params.provider.Arguments
+import org.junit.jupiter.params.provider.MethodSource
+import org.junit.jupiter.params.provider.ValueSource
+import org.pixode.dynadoc.core.Document
+import org.pixode.dynadoc.core.DocumentKey
+import org.pixode.dynadoc.core.UpdateConflictException
+import org.pixode.dynadoc.core.getDocument
+import org.pixode.dynadoc.core.parseDocument
+import org.pixode.dynadoc.core.updateDocuments
+import org.pixode.dynadoc.yugabytedb.YugabyteDbDocumentStoreTests.MethodSources.PREFIX
+import org.testcontainers.containers.YugabyteDBYSQLContainer
+import org.testcontainers.junit.jupiter.Container
+import org.testcontainers.junit.jupiter.Testcontainers
+
+private const val JSON_1 = """ {"abc":"def"} """
+private const val JSON_2 = """ {"ghi":"jkl"} """
+private const val JSON_3 = """ {"mno":"pqr"} """
+private const val JSON_4 = """ {"stu":"vwx"} """
+private const val JSON_5 = """ {"yza":"bcd"} """
+private const val JSON_6 = """ {"efg":"hij"} """
+private const val JSON_NULL_CHARACTER = """ {"key":"\u0000"} """
+
+// A test waiting for a lock would otherwise never complete
+@Timeout(120, unit = TimeUnit.SECONDS)
+@Testcontainers
+class YugabyteDbDocumentStoreTests {
+    private val store: YugabyteDbDocumentStore = YugabyteDbDocumentStore(connectionFactory, TABLE)
+    private val partitionKey: String = UUID.randomUUID().toString()
+    private val ids: List<DocumentKey> = (0..10).map { i -> DocumentKey("${partitionKey}_$i", "0000") }
+    private val rowMapper = RowMapper()
+
+    //region updateDocuments
+
+    @ParameterizedTest
+    @MethodSource("$PREFIX#updateDocuments_oneArgument")
+    fun updateDocuments_emptyToValue(to: String?) = runBlocking {
+        updateDocument(to, 0)
+
+        val document = store.getDocument(ids[0])
+
+        assertDocument(document, ids[0], to, 1)
+    }
+
+    @ParameterizedTest
+    @MethodSource("$PREFIX#updateDocuments_twoArguments")
+    fun updateDocuments_valueToValue(from: String?, to: String?) = runBlocking {
+        updateDocument(from, 0)
+        updateDocument(to, 1)
+
+        val document = store.getDocument(ids[0])
+
+        assertDocument(document, ids[0], to, 2)
+    }
+
+    @Test
+    fun updateDocuments_emptyToCheck() = runBlocking {
+        checkDocument(0)
+
+        val document = store.getDocument(ids[0])
+
+        assertDocument(document, ids[0], null, 0)
+    }
+
+    @ParameterizedTest
+    @MethodSource("$PREFIX#updateDocuments_oneArgument")
+    fun updateDocuments_valueToCheck(from: String?) = runBlocking {
+        updateDocument(from, 0)
+        checkDocument(1)
+
+        val document = store.getDocument(ids[0])
+
+        assertDocument(document, ids[0], from, 1)
+    }
+
+    @ParameterizedTest
+    @MethodSource("$PREFIX#updateDocuments_oneArgument")
+    fun updateDocuments_checkToValue(to: String?) = runBlocking {
+        checkDocument(0)
+        updateDocument(to, 0)
+
+        val document = store.getDocument(ids[0])
+
+        assertDocument(document, ids[0], to, 1)
+    }
+
+    @Test
+    fun updateDocuments_checkToCheck() = runBlocking {
+        checkDocument(0)
+        checkDocument(0)
+
+        val document = store.getDocument(ids[0])
+
+        assertDocument(document, ids[0], null, 0)
+    }
+
+    @Test
+    fun updateDocuments_noUpdate() = runBlocking {
+        store.updateDocuments(
+            updatedDocuments = emptyList(),
+            checkedDocuments = emptyList(),
+        )
+    }
+
+    @ParameterizedTest
+    @ValueSource(
+        strings = [
+            """ "a" """,
+            """ 10 """,
+            """ true """,
+            """ false """,
+            """ null """,
+            """ ["a"] """,
+            """ a """,
+        ],
+    )
+    fun updateDocuments_invalidJson(to: String) = runBlocking {
+        assertThrows<IllegalArgumentException> {
+            updateDocument(to, 0)
+        }
+
+        val document = store.getDocument(ids[0])
+
+        assertDocument(document, ids[0], null, 0)
+    }
+
+    @Test
+    fun updateDocuments_noReservedFields() = runBlocking {
+        val json = """ {"partition_key":"a","local_key":"b","version":3,"body":null} """
+        updateDocument(json, 0)
+
+        val document = store.getDocument(ids[0])
+
+        assertDocument(document, ids[0], json, 1)
+    }
+
+    @ParameterizedTest
+    @ValueSource(booleans = [true, false])
+    fun updateDocuments_conflictDocumentDoesNotExist(checkOnly: Boolean) = runBlocking {
+        val exception = assertThrows<UpdateConflictException> {
+            if (checkOnly) {
+                checkDocument(10)
+            } else {
+                updateDocument(JSON_1, 10)
+            }
+        }
+
+        val document = store.getDocument(ids[0])
+
+        assertDocument(document, ids[0], null, 0)
+        assertEquals(ids[0], exception.id)
+    }
+
+    @ParameterizedTest
+    @ValueSource(booleans = [true, false])
+    fun updateDocuments_conflictWrongVersion(checkOnly: Boolean) = runBlocking {
+        updateDocument(JSON_1, 0)
+
+        val exception = assertThrows<UpdateConflictException> {
+            if (checkOnly) {
+                checkDocument(10)
+            } else {
+                updateDocument(JSON_2, 10)
+            }
+        }
+
+        val document = store.getDocument(ids[0])
+
+        assertDocument(document, ids[0], JSON_1, 1)
+        assertEquals(ids[0], exception.id)
+    }
+
+    @ParameterizedTest
+    @ValueSource(booleans = [true, false])
+    fun updateDocuments_conflictDocumentAlreadyExists(checkOnly: Boolean) = runBlocking {
+        updateDocument(JSON_1, 0)
+
+        val exception = assertThrows<UpdateConflictException> {
+            if (checkOnly) {
+                checkDocument(0)
+            } else {
+                updateDocument(JSON_2, 0)
+            }
+        }
+
+        val document = store.getDocument(ids[0])
+
+        assertDocument(document, ids[0], JSON_1, 1)
+        assertEquals(ids[0], exception.id)
+    }
+
+    @Test
+    fun updateDocuments_conflictDeletedDocument() = runBlocking {
+        updateDocument(JSON_1, 0)
+        updateDocument(null, 1)
+
+        val exception = assertThrows<UpdateConflictException> {
+            updateDocument(JSON_2, 0)
+        }
+
+        val document = store.getDocument(ids[0])
+
+        assertDocument(document, ids[0], null, 2)
+        assertEquals(ids[0], exception.id)
+    }
+
+    @Test
+    fun updateDocuments_singleDocumentServerError() = runBlocking {
+        // Rejected by the server, which doesn't allow the null character in JSONB strings
+        assertThrows<R2dbcException> {
+            updateDocument(JSON_NULL_CHARACTER, 0)
+        }
+
+        val document = store.getDocument(ids[0])
+
+        assertDocument(document, ids[0], null, 0)
+    }
+
+    @Test
+    fun updateDocuments_multipleDocumentsSuccess() = runBlocking {
+        updateDocument(ids[0], JSON_1, 0)
+        updateDocument(ids[1], JSON_2, 0)
+
+        store.updateDocuments(
+            updatedDocuments = listOf(
+                parseDocument(ids[0], JSON_3, 1),
+                parseDocument(ids[2], JSON_4, 0),
+            ),
+            checkedDocuments = listOf(
+                parseDocument(ids[1], JSON_5, 1),
+                parseDocument(ids[3], JSON_6, 0),
+            ),
+        )
+
+        val document1 = store.getDocument(ids[0])
+        val document2 = store.getDocument(ids[1])
+        val document3 = store.getDocument(ids[2])
+        val document4 = store.getDocument(ids[3])
+
+        assertDocument(document1, ids[0], JSON_3, 2)
+        assertDocument(document2, ids[1], JSON_2, 1)
+        assertDocument(document3, ids[2], JSON_4, 1)
+        assertDocument(document4, ids[3], null, 0)
+    }
+
+    @Test
+    fun updateDocuments_multipleDocumentsDeleted() = runBlocking {
+        updateDocument(ids[0], JSON_1, 0)
+
+        store.updateDocuments(
+            parseDocument(ids[0], null, 1),
+            parseDocument(ids[1], null, 0),
+        )
+
+        val document1 = store.getDocument(ids[0])
+        val document2 = store.getDocument(ids[1])
+
+        assertDocument(document1, ids[0], null, 2)
+        assertDocument(document2, ids[1], null, 1)
+    }
+
+    @Test
+    fun updateDocuments_multipleDocumentsUpdatedAndChecked() = runBlocking {
+        updateDocument(ids[0], JSON_1, 0)
+
+        store.updateDocuments(
+            updatedDocuments = listOf(parseDocument(ids[0], JSON_2, 1)),
+            checkedDocuments = listOf(parseDocument(ids[0], JSON_3, 1)),
+        )
+
+        val document = store.getDocument(ids[0])
+
+        assertDocument(document, ids[0], JSON_2, 2)
+    }
+
+    @Test
+    fun updateDocuments_multipleDocumentsUpdatedAndCheckedConflict() = runBlocking {
+        updateDocument(ids[0], JSON_1, 0)
+
+        val exception = assertThrows<UpdateConflictException> {
+            store.updateDocuments(
+                updatedDocuments = listOf(parseDocument(ids[0], JSON_2, 1)),
+                checkedDocuments = listOf(parseDocument(ids[0], JSON_3, 2)),
+            )
+        }
+
+        val document = store.getDocument(ids[0])
+
+        assertDocument(document, ids[0], JSON_1, 1)
+        assertEquals(ids[0], exception.id)
+    }
+
+    @ParameterizedTest
+    @ValueSource(booleans = [true, false])
+    fun updateDocuments_multipleDocumentsConflict(checkOnly: Boolean) = runBlocking {
+        updateDocument(ids[0], JSON_1, 0)
+
+        val exception = assertThrows<UpdateConflictException> {
+            if (checkOnly) {
+                store.updateDocuments(
+                    updatedDocuments = listOf(parseDocument(ids[0], JSON_2, 1)),
+                    checkedDocuments = listOf(parseDocument(ids[1], JSON_3, 10)),
+                )
+            } else {
+                store.updateDocuments(
+                    parseDocument(ids[0], JSON_2, 1),
+                    parseDocument(ids[1], JSON_3, 10),
+                )
+            }
+        }
+
+        val document1 = store.getDocument(ids[0])
+        val document2 = store.getDocument(ids[1])
+
+        assertDocument(document1, ids[0], JSON_1, 1)
+        assertDocument(document2, ids[1], null, 0)
+        assertEquals(ids[1], exception.id)
+    }
+
+    @Test
+    fun updateDocuments_multipleDocumentsCheckExistingConflict() = runBlocking {
+        updateDocument(ids[1], JSON_1, 0)
+
+        val exception = assertThrows<UpdateConflictException> {
+            store.updateDocuments(
+                updatedDocuments = listOf(parseDocument(ids[0], JSON_2, 0)),
+                checkedDocuments = listOf(parseDocument(ids[1], JSON_3, 0)),
+            )
+        }
+
+        val document1 = store.getDocument(ids[0])
+        val document2 = store.getDocument(ids[1])
+
+        assertDocument(document1, ids[0], null, 0)
+        assertDocument(document2, ids[1], JSON_1, 1)
+        assertEquals(ids[1], exception.id)
+    }
+
+    @ParameterizedTest
+    @ValueSource(booleans = [true, false])
+    fun updateDocuments_multipleDocumentsConcurrentTransaction(checkOnly: Boolean) = runBlocking {
+        updateDocument(ids[0], JSON_1, 0)
+        updateDocument(ids[1], JSON_2, 0)
+
+        // The concurrent transaction only commits after the update returns, so the update fails without waiting for it
+        val exception = withConcurrentTransaction(parseDocument(ids[1], JSON_3, 1), commit = true) {
+            assertThrows<UpdateConflictException> {
+                if (checkOnly) {
+                    store.updateDocuments(
+                        updatedDocuments = listOf(parseDocument(ids[0], JSON_4, 1)),
+                        checkedDocuments = listOf(parseDocument(ids[1], JSON_5, 1)),
+                    )
+                } else {
+                    store.updateDocuments(
+                        parseDocument(ids[0], JSON_4, 1),
+                        parseDocument(ids[1], JSON_5, 1),
+                    )
+                }
+            }
+        }
+
+        val document1 = store.getDocument(ids[0])
+        val document2 = store.getDocument(ids[1])
+
+        assertDocument(document1, ids[0], JSON_1, 1)
+        assertDocument(document2, ids[1], JSON_3, 2)
+        assertEquals(ids[1], exception.id)
+    }
+
+    @ParameterizedTest
+    @ValueSource(booleans = [true, false])
+    fun updateDocuments_multipleDocumentsConcurrentTransactionRollback(checkOnly: Boolean) = runBlocking {
+        updateDocument(ids[0], JSON_1, 0)
+        updateDocument(ids[1], JSON_2, 0)
+
+        val update: suspend () -> Unit = {
+            if (checkOnly) {
+                store.updateDocuments(
+                    updatedDocuments = listOf(parseDocument(ids[0], JSON_4, 1)),
+                    checkedDocuments = listOf(parseDocument(ids[1], JSON_5, 1)),
+                )
+            } else {
+                store.updateDocuments(
+                    parseDocument(ids[0], JSON_4, 1),
+                    parseDocument(ids[1], JSON_5, 1),
+                )
+            }
+        }
+
+        withConcurrentTransaction(parseDocument(ids[1], JSON_3, 1), commit = false) {
+            assertThrows<UpdateConflictException> { update() }
+        }
+
+        // The concurrent transaction has been rolled back, so the same update succeeds
+        update()
+
+        val document1 = store.getDocument(ids[0])
+        val document2 = store.getDocument(ids[1])
+
+        assertDocument(document1, ids[0], JSON_4, 2)
+        assertDocument(document2, ids[1], if (checkOnly) JSON_2 else JSON_5, if (checkOnly) 1 else 2)
+    }
+
+    @Test
+    fun updateDocuments_lockedDocument() = runBlocking {
+        updateDocument(ids[0], JSON_1, 0)
+
+        // The concurrent transaction only commits after the update returns, so the update fails without waiting for it
+        val exception = withConcurrentTransaction(parseDocument(ids[0], JSON_2, 1), commit = true) {
+            assertThrows<UpdateConflictException> {
+                store.updateDocuments(parseDocument(ids[0], JSON_3, 1))
+            }
+        }
+
+        val document = store.getDocument(ids[0])
+
+        assertEquals(ids[0], exception.id)
+        assertDocument(document, ids[0], JSON_2, 2)
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = ["single", "multiple", "check"])
+    fun updateDocuments_concurrentInsert(mode: String) = runBlocking {
+        // There is no row to lock, so the update waits for the concurrent transaction inserting the same document
+        val result: Result<Unit> = withConcurrentTransaction(parseDocument(ids[1], JSON_1, 0), commit = true) {
+            val update: Deferred<Result<Unit>> = async(Dispatchers.Default) {
+                runCatching {
+                    when (mode) {
+                        "single" -> store.updateDocuments(parseDocument(ids[1], JSON_2, 0))
+                        "multiple" -> store.updateDocuments(
+                            parseDocument(ids[0], JSON_2, 0),
+                            parseDocument(ids[1], JSON_3, 0),
+                        )
+                        else -> store.updateDocuments(
+                            updatedDocuments = listOf(parseDocument(ids[0], JSON_2, 0)),
+                            checkedDocuments = listOf(parseDocument(ids[1], JSON_3, 0)),
+                        )
+                    }
+                }
+            }
+
+            delay(2000)
+            assertTrue(update.isActive)
+
+            update
+        }.await()
+
+        val document1 = store.getDocument(ids[0])
+        val document2 = store.getDocument(ids[1])
+
+        assertInstanceOf(UpdateConflictException::class.java, result.exceptionOrNull())
+        assertDocument(document1, ids[0], null, 0)
+        assertDocument(document2, ids[1], JSON_1, 1)
+    }
+
+    @Test
+    fun updateDocuments_multipleDocumentsServerError() = runBlocking {
+        updateDocument(ids[0], JSON_1, 0)
+
+        assertThrows<R2dbcException> {
+            store.updateDocuments(
+                parseDocument(ids[0], JSON_2, 1),
+                parseDocument(ids[1], JSON_NULL_CHARACTER, 0),
+            )
+        }
+
+        val document1 = store.getDocument(ids[0])
+        val document2 = store.getDocument(ids[1])
+
+        assertDocument(document1, ids[0], JSON_1, 1)
+        assertDocument(document2, ids[1], null, 0)
+    }
+
+    /**
+     * Executes [block] while a concurrent transaction writing [document] is in progress: the document is locked by the
+     * concurrent transaction before [block] is executed, and the concurrent transaction is committed or rolled back
+     * after [block] completes successfully.
+     */
+    private suspend fun <T> withConcurrentTransaction(document: Document, commit: Boolean, block: suspend () -> T): T {
+        val connection: Connection = connectionFactory.create().awaitSingle()
+
+        try {
+            connection.beginTransaction().awaitFirstOrNull()
+            connection
+                .createStatement(
+                    "INSERT INTO $TABLE ($PARTITION_KEY, $LOCAL_KEY, $VERSION, $BODY) " +
+                        "VALUES ($1, $2, $3, CAST($4 AS jsonb)) " +
+                        "ON CONFLICT ($PARTITION_KEY, $LOCAL_KEY) " +
+                        "DO UPDATE SET $VERSION = EXCLUDED.$VERSION, $BODY = EXCLUDED.$BODY"
+                )
+                .bind(0, document.id.partitionKey)
+                .bind(1, document.id.localKey)
+                .bind(2, document.version + 1)
+                .bind(3, checkNotNull(rowMapper.fromBody(document)))
+                .execute()
+                .awaitSingle()
+                .rowsUpdated
+                .awaitFirstOrNull()
+
+            val result: T = block()
+
+            if (commit) {
+                connection.commitTransaction().awaitFirstOrNull()
+            } else {
+                connection.rollbackTransaction().awaitFirstOrNull()
+            }
+
+            return result
+        } finally {
+            connection.close().awaitFirstOrNull()
+        }
+    }
+
+    //endregion
+
+    //region getDocuments
+
+    @Test
+    fun getDocuments_singleDocument() = runBlocking {
+        updateDocument(JSON_1, 0)
+
+        val documents: List<Document> = store.getDocuments(listOf(ids[0])).toList()
+
+        assertEquals(1, documents.size)
+        assertDocument(documents[0], ids[0], JSON_1, 1)
+    }
+
+    @Test
+    fun getDocuments_multipleDocuments() = runBlocking {
+        updateDocument(ids[0], JSON_1, 0)
+        updateDocument(ids[1], JSON_2, 0)
+
+        val documents: List<Document> = store.getDocuments(listOf(ids[0], ids[2], ids[0], ids[1])).toList()
+
+        assertEquals(4, documents.size)
+        assertDocument(documents[0], ids[0], JSON_1, 1)
+        assertDocument(documents[1], ids[2], null, 0)
+        assertDocument(documents[2], ids[0], JSON_1, 1)
+        assertDocument(documents[3], ids[1], JSON_2, 1)
+    }
+
+    @Test
+    fun getDocuments_noDocument() = runBlocking {
+        val documents: List<Document> = store.getDocuments(listOf()).toList()
+
+        assertEquals(0, documents.size)
+    }
+
+    @ParameterizedTest
+    @MethodSource("$PREFIX#getDocuments_jsonDeserialization")
+    fun getDocuments_jsonDeserialization(json: String) = runBlocking {
+        updateDocument(ids[0], json, 0)
+
+        val document = store.getDocument(ids[0])
+
+        assertDocument(document, ids[0], json, 1)
+    }
+
+    //endregion
+
+    //region scan
+
+    @Test
+    fun scan_range() = runBlocking {
+        val documents = (0..9).map { i ->
+            parseDocument(DocumentKey(partitionKey, "ABC0$i"), """ {"a":$i} """, 0)
+        }
+        store.updateDocuments(*documents.toTypedArray())
+
+        val result = store.scan(partitionKey, "ABC03", "ABC06")
+
+        assertDocuments(result.toList(), documents.slice(3..5))
+    }
+
+    @Test
+    fun scan_wholePartition() = runBlocking {
+        val documents = (0..9).map { i ->
+            parseDocument(DocumentKey(partitionKey, "ABC0$i"), """ {"a":$i} """, 0)
+        }
+        // Documents with the same local keys in another partition
+        val otherDocuments = (0..9).map { i ->
+            parseDocument(DocumentKey("${partitionKey}_other", "ABC0$i"), """ {"b":$i} """, 0)
+        }
+        store.updateDocuments(*(otherDocuments + documents.reversed()).toTypedArray())
+
+        val result = store.scan(partitionKey)
+
+        assertDocuments(result.toList(), documents)
+    }
+
+    @Test
+    fun scan_deletedDocuments() = runBlocking {
+        updateDocument(DocumentKey(partitionKey, "A"), JSON_1, 0)
+        updateDocument(DocumentKey(partitionKey, "B"), JSON_2, 0)
+        updateDocument(DocumentKey(partitionKey, "A"), null, 1)
+
+        val result = store.scan(partitionKey).toList()
+
+        assertEquals(2, result.size)
+        assertDocument(result[0], DocumentKey(partitionKey, "A"), null, 2)
+        assertDocument(result[1], DocumentKey(partitionKey, "B"), JSON_2, 1)
+    }
+
+    @Test
+    fun scan_emptyPartition() = runBlocking {
+        val result = store.scan(partitionKey).toList()
+
+        assertEquals(0, result.size)
+    }
+
+    @Test
+    fun scan_byteOrder() = runBlocking {
+        // Local keys are sorted by their UTF-8 encoding, regardless of the locale of the database
+        val localKeys: List<String> = listOf("B", "a", "é")
+        val documents = localKeys.map { parseDocument(DocumentKey(partitionKey, it), JSON_1, 0) }
+        store.updateDocuments(*documents.reversed().toTypedArray())
+
+        val result = store.scan(partitionKey)
+
+        assertDocuments(result.toList(), documents)
+    }
+
+    //endregion
+
+    //region query
+
+    @Test
+    fun query_filterBody() = runBlocking {
+        val documents = (0..9).map { i ->
+            parseDocument(DocumentKey(partitionKey, "ABC0$i"), """ {"a":$i} """, 0)
+        }
+        store.updateDocuments(*documents.toTypedArray())
+
+        val result = store.query(
+            "$PARTITION_KEY = $1 AND ($BODY->>'a')::int > $2 ORDER BY $LOCAL_KEY",
+            partitionKey,
+            4,
+        )
+
+        assertDocuments(result.toList(), documents.slice(5..9))
+    }
+
+    @Test
+    fun query_filterAcrossPartitions() = runBlocking {
+        val documents = (0..9).map { i ->
+            parseDocument(
+                id = DocumentKey("${partitionKey}_$i", "0000"),
+                body = """ {"b":"value $i"} """,
+                version = 0,
+            )
+        }
+        store.updateDocuments(*documents.toTypedArray())
+
+        val result = store.query(
+            "$PARTITION_KEY >= $1 AND $PARTITION_KEY < $2 AND $BODY->>'b' <= $3 ORDER BY $PARTITION_KEY",
+            partitionKey,
+            "${partitionKey}a",
+            "value 4",
+        )
+
+        assertDocuments(result.toList(), documents.slice(0..4))
+    }
+
+    @Test
+    fun query_multipleBatches() = runBlocking {
+        val documents = (100..399).map { i ->
+            parseDocument(DocumentKey(partitionKey, "ABC0$i"), """ {"b":$i} """, 0)
+        }
+        documents.chunked(100).forEach { chunk -> store.updateDocuments(*chunk.toTypedArray()) }
+
+        val result = store.query(
+            "$PARTITION_KEY = $1 AND $LOCAL_KEY >= $2 AND $LOCAL_KEY <= $3 ORDER BY $LOCAL_KEY",
+            partitionKey,
+            "ABC0120",
+            "ABC0380",
+        ) {
+            fetchSize(7)
+        }
+
+        assertDocuments(result.toList(), documents.slice(20..280))
+    }
+
+    //endregion
+
+    //region createTable
+
+    @Test
+    fun createTable_splitAt() = runBlocking {
+        val splitStore = YugabyteDbDocumentStore(connectionFactory, "public.tests_split")
+        val splitIds: List<DocumentKey> = listOf("a", "g", "it's", "z").map { DocumentKey(it, partitionKey) }
+
+        splitStore.createTable(splitAt = listOf("g", "it's"))
+        // The table already exists
+        splitStore.createTable()
+        splitStore.updateDocuments(*splitIds.map { parseDocument(it, JSON_1, 0) }.toTypedArray())
+
+        val documents: List<Document> = splitStore.getDocuments(splitIds).toList()
+
+        assertEquals(4, documents.size)
+        repeat(4) { i -> assertDocument(documents[i], splitIds[i], JSON_1, 1) }
+    }
+
+    //endregion
+
+    //region MethodSources
+
+    object MethodSources {
+        const val PREFIX: String = $$"org.pixode.dynadoc.yugabytedb.YugabyteDbDocumentStoreTests$MethodSources"
+
+        @JvmStatic
+        fun updateDocuments_oneArgument(): Stream<String?> {
+            return Stream.of(
+                JSON_1,
+                null,
+            )
+        }
+
+        @JvmStatic
+        fun updateDocuments_twoArguments(): Stream<Arguments> {
+            return Stream.of(
+                Arguments.of(JSON_1, JSON_2),
+                Arguments.of(null, JSON_2),
+                Arguments.of(JSON_1, null),
+                Arguments.of(null, null),
+            )
+        }
+
+        @JvmStatic
+        fun getDocuments_jsonDeserialization(): Stream<String> {
+            val scalars: List<String> = listOf(
+                """ 1234567890.0987654321 """,
+                """ 42 """,
+                """ "text" """,
+                """ true """,
+                """ false """,
+                """ null """,
+            )
+
+            val firstLevel: List<String> = scalars.map {
+                """ { "a": $it } """
+            } + """ { } """
+
+            val nestedObjects = firstLevel.map {
+                """ { "b": $it } """
+            }
+
+            val arrayOfObjects = (scalars + firstLevel).map {
+                val repeat = "$it, $it, $it"
+                """ { "b": [ $repeat ] } """
+            }
+
+            val mixedArray = """ { "c": [ ${(scalars + firstLevel).joinToString()} ] } """
+
+            return (firstLevel + nestedObjects + arrayOfObjects + mixedArray).stream()
+        }
+    }
+
+    //endregion
+
+    //region Helper Methods
+
+    private suspend fun updateDocument(body: String?, version: Long) =
+        updateDocument(ids[0], body, version)
+
+    private suspend fun updateDocument(id: DocumentKey, body: String?, version: Long) =
+        store.updateDocuments(parseDocument(id, body, version))
+
+    private suspend fun checkDocument(version: Long) =
+        store.updateDocuments(
+            updatedDocuments = emptyList(),
+            checkedDocuments = listOf(parseDocument(ids[0], """ {"ignored":"ignored"} """, version)),
+        )
+
+    private fun assertDocuments(actual: List<Document>, expected: List<Document>) {
+        assertEquals(expected.size, actual.size)
+
+        repeat(actual.size) { i ->
+            assertDocument(actual[i], expected[i].id, expected[i].body.toString(), 1)
+        }
+    }
+
+    //endregion
+
+    //region Setup
+
+    private companion object Setup {
+        const val TABLE = "tests"
+
+        lateinit var connectionFactory: ConnectionFactory
+
+        // Failing without waiting for a locked row requires Read Committed isolation and wait queues
+        @JvmStatic
+        @Container
+        private val container = YugabyteDBYSQLContainer("yugabytedb/yugabyte:2025.2.6.0-b111")
+            .withCommand(
+                "bin/yugabyted start --background=false " +
+                    "--tserver_flags=yb_enable_read_committed_isolation=true,enable_wait_queues=true"
+            )
+
+        @BeforeAll
+        @JvmStatic
+        fun globalSetup() {
+            require(container.isRunning()) { container.logs }
+            connectionFactory = ConnectionFactories.get(
+                "r2dbc:postgresql://${container.username}:${container.password}@" +
+                    "${container.host}:${container.getMappedPort(5433)}/${container.databaseName}"
+            )
+
+            runBlocking {
+                YugabyteDbDocumentStore(connectionFactory, TABLE).createTable()
+            }
+        }
+    }
+
+    //endregion
+}
