@@ -2,8 +2,6 @@ package org.pixode.dynadoc.yugabytedb
 
 import io.r2dbc.spi.Readable
 import kotlinx.serialization.json.Json
-import kotlinx.serialization.json.JsonElement
-import kotlinx.serialization.json.JsonObject
 import org.pixode.dynadoc.core.Document
 import org.pixode.dynadoc.core.DocumentKey
 
@@ -14,7 +12,7 @@ const val VERSION = "version"
 const val BODY = "body"
 
 /**
- * Maps documents to the rows of a YugabyteDB table.
+ * Maps the rows of a YugabyteDB table to documents.
  *
  * A row has the columns `partition_key`, `local_key`, `version` and `body`. The body is a JSONB column, exchanged with
  * the database as text so that the mapping doesn't depend on a specific driver. A deleted document is stored with a
@@ -33,16 +31,4 @@ class RowMapper {
     )
 
     fun toVersion(row: Readable): Long = checkNotNull(row.get(VERSION, Long::class.javaObjectType))
-
-    /**
-     * Returns the value of the `body` column for the document, or null if the document is deleted.
-     */
-    fun fromBody(document: Document): String? {
-        val body: JsonElement? = document.body
-        require(body == null || body is JsonObject) {
-            "The document must be a valid JSON object"
-        }
-
-        return body?.toString()
-    }
 }

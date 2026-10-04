@@ -385,7 +385,8 @@ val connectionFactory: ConnectionFactory =
 
 val documentStore = YugabyteDbDocumentStore(connectionFactory, "documents")
 
-// Create the table, range-sharded by hash of the partition key, partition key then local key
+// Create the table, range-sharded by hash of the partition key, partition key then local key,
+// and the function used to update its documents
 documentStore.createTable()
 
 val entityStore = EntityStore(documentStore, DefaultJsonSerializer)
@@ -407,9 +408,13 @@ YugabyteDB then splits the tablets automatically as they grow. A tablet can be s
 
 ### Concurrency
 
-Updating a single document is a single statement. Updating multiple documents atomically (for example with `EntityStore.transaction`) relies on a Read Committed transaction: the rows of the documents are locked, their versions are checked, then the updated documents are written. Checked documents are locked without being modified, so that a concurrent write to any of the documents causes an `UpdateConflictException`.
+Documents are updated by a function stored in the database, which `createTable` creates along with the table, under the name of the table followed by `_update`. An update, whether of a single document or of multiple documents (for example with `EntityStore.transaction`), is a single call to that function, so it takes a single round trip to the database and runs as a single transaction.
 
-An update that finds one of its documents locked by another update still in progress fails immediately with an `UpdateConflictException`, rather than waiting for the other update to complete. This relies on the Read Committed isolation level and on wait queues, which are enabled by default in recent versions of YugabyteDB (`yb_enable_read_committed_isolation` and `enable_wait_queues`). Without them, updates remain atomic and conflicts are still detected, but an update may wait for the other one to complete. Under contention, using a `RetryPolicy` with `transaction` retries the update with fresh versions of the documents.
+For each document, the function locks the row, checks its version, then writes the document. Checked documents are locked without being modified, so that a concurrent write to any of the documents causes an `UpdateConflictException`. When a document doesn't have the expected version, the changes already made by the function are rolled back.
+
+`createTable` can be called again on an existing table to replace the function with the one of the current version of the library.
+
+An update that finds one of its documents locked by another update still in progress fails immediately with an `UpdateConflictException`, rather than waiting for the other update to complete. This relies on wait queues and on Read Committed being the default isolation level of the database, which is the case in recent versions of YugabyteDB (`enable_wait_queues` and `yb_enable_read_committed_isolation`). Without them, updates remain atomic and conflicts are still detected, but an update may wait for the other one to complete. Under contention, using a `RetryPolicy` with `transaction` retries the update with fresh versions of the documents.
 
 The only case in which an update waits is when another update in progress is creating the same document, as there is no row to lock yet. It then fails with an `UpdateConflictException` if the other update is committed.
 

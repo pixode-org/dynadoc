@@ -3,40 +3,15 @@ package org.pixode.dynadoc.yugabytedb
 import io.r2dbc.spi.Readable
 import kotlinx.serialization.json.Json
 import org.junit.jupiter.api.Assertions.assertEquals
-import org.junit.jupiter.api.Assertions.assertNull
 import org.junit.jupiter.api.Test
-import org.junit.jupiter.api.assertThrows
 import org.junit.jupiter.params.ParameterizedTest
 import org.junit.jupiter.params.provider.ValueSource
 import org.pixode.dynadoc.core.DocumentKey
-import org.pixode.dynadoc.core.parseDocument
 
 private val id: DocumentKey = DocumentKey("PK", "LK")
 
 class RowMapperTests {
     private val rowMapper = RowMapper()
-
-    @Test
-    fun fromBody_value() {
-        val body: String? = rowMapper.fromBody(parseDocument(id, """ {"a":1.50} """, 4))
-
-        assertEquals(Json.parseToJsonElement(""" {"a":1.50} """), Json.parseToJsonElement(checkNotNull(body)))
-    }
-
-    @Test
-    fun fromBody_deleted() {
-        val body: String? = rowMapper.fromBody(parseDocument(id, null, 4))
-
-        assertNull(body)
-    }
-
-    @ParameterizedTest
-    @ValueSource(strings = [""" "a" """, """ 10 """, """ true """, """ null """, """ ["a"] """])
-    fun fromBody_invalidBody(body: String) {
-        assertThrows<IllegalArgumentException> {
-            rowMapper.fromBody(parseDocument(id, body, 0))
-        }
-    }
 
     @ParameterizedTest
     @ValueSource(
@@ -48,7 +23,7 @@ class RowMapperTests {
         ],
     )
     fun toDocument_roundTrip(body: String) {
-        val document = rowMapper.toDocument(row(rowMapper.fromBody(parseDocument(id, body, 0)), 1))
+        val document = rowMapper.toDocument(row(body, 1))
 
         assertDocument(document, id, body, 1)
         assertEquals(Json.parseToJsonElement(body).toString(), document.body.toString())

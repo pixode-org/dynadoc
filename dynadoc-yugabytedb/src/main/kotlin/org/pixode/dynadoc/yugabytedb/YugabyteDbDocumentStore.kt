@@ -2,7 +2,6 @@ package org.pixode.dynadoc.yugabytedb
 
 import io.r2dbc.spi.Connection
 import io.r2dbc.spi.ConnectionFactory
-import io.r2dbc.spi.IsolationLevel
 import io.r2dbc.spi.R2dbcException
 import io.r2dbc.spi.Row
 import io.r2dbc.spi.Statement
@@ -19,6 +18,11 @@ import kotlinx.coroutines.reactive.asFlow
 import kotlinx.coroutines.reactive.awaitFirstOrNull
 import kotlinx.coroutines.reactive.awaitSingle
 import kotlinx.coroutines.withContext
+import kotlinx.serialization.json.JsonArray
+import kotlinx.serialization.json.JsonElement
+import kotlinx.serialization.json.JsonNull
+import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonPrimitive
 import org.pixode.dynadoc.core.Document
 import org.pixode.dynadoc.core.DocumentKey
 import org.pixode.dynadoc.core.DocumentStore
@@ -29,6 +33,10 @@ private const val SERIALIZATION_FAILURE = "40001"
 private const val DEADLOCK_DETECTED = "40P01"
 private const val UNIQUE_VIOLATION = "23505"
 
+// The error raised by the update function to roll back its changes when a document has been modified
+private const val UPDATE_CONFLICT = "DD001"
+
+private const val CHECK = "check"
 private const val HASH_COUNT = 65536
 
 private val conflictStates: Set<String> =
@@ -44,9 +52,10 @@ private val conflictStates: Set<String> =
  * local key, and can be split across several tablets. Deleted documents are kept with a null body so that their
  * version is preserved.
  *
- * Updating multiple documents atomically relies on a Read Committed transaction, in which the rows of the documents
- * are locked without waiting before being checked and written. An update fails without waiting if any of its
- * documents is locked by a concurrent update.
+ * Documents are updated by a function stored in the database (see [createTable]), so that an update is a single round
+ * trip to the database, and a single transaction. The function locks the rows of the documents without waiting before
+ * checking and writing them, so an update fails without waiting if any of its documents is locked by a concurrent
+ * update.
  */
 class YugabyteDbDocumentStore(
     private val connectionFactory: ConnectionFactory,
@@ -54,64 +63,24 @@ class YugabyteDbDocumentStore(
 ) : DocumentStore {
 
     private val rowMapper: RowMapper = RowMapper()
-    private val table: String = tableName.split('.').joinToString(".", transform = ::quoteIdentifier)
+    private val tableNameParts: List<String> = tableName.split('.')
+    private val table: String = tableNameParts.joinToString(".", transform = ::quoteIdentifier)
+    private val updateFunction: String =
+        (tableNameParts.dropLast(1) + "${tableNameParts.last()}_update").joinToString(".", transform = ::quoteIdentifier)
+
     private val partitionFilter: String = "$PARTITION_HASH = ${hash("$1")} AND $PARTITION_KEY = $1"
-    private val keyFilter: String = "$partitionFilter AND $LOCAL_KEY = $2"
 
     private val selectSql: String = "SELECT $PARTITION_KEY, $LOCAL_KEY, $VERSION, $BODY::text AS $BODY FROM $table"
-    private val lockSql: String = "SELECT $PARTITION_KEY, $LOCAL_KEY, $VERSION FROM $table"
-    private val insertSql: String =
-        "INSERT INTO $table ($PARTITION_HASH, $PARTITION_KEY, $LOCAL_KEY, $VERSION, $BODY) " +
-            "VALUES (${hash("$1")}, $1, $2, $3, CAST($4 AS jsonb)) ON CONFLICT DO NOTHING"
-    private val updateSql: String =
-        "UPDATE $table SET $VERSION = $3, $BODY = CAST($4 AS jsonb) WHERE $keyFilter AND $VERSION = $5"
-    private val deleteSql: String = "DELETE FROM $table WHERE $keyFilter AND $VERSION = $3"
-
-    // Locking the row in a subquery lets a single statement fail instead of waiting when the row is locked
-    private val updateNoWaitSql: String =
-        "$updateSql AND ($PARTITION_HASH, $PARTITION_KEY, $LOCAL_KEY) IN (" +
-            "SELECT $PARTITION_HASH, $PARTITION_KEY, $LOCAL_KEY FROM $table " +
-            "WHERE $keyFilter AND $VERSION = $5 FOR UPDATE NOWAIT)"
+    private val updateSql: String = "SELECT $updateFunction(CAST($1 AS jsonb))"
 
     //region updateDocuments
 
     override suspend fun updateDocuments(updatedDocuments: Iterable<Document>, checkedDocuments: Iterable<Document>) {
         val updatedList: List<Document> = updatedDocuments.toList()
-        val checkedList: List<Document> = checkedDocuments.toList()
-
-        when {
-            updatedList.isEmpty() && checkedList.isEmpty() -> {}
-            updatedList.size == 1 && checkedList.isEmpty() -> updateSingleDocument(updatedList[0])
-            else -> updateMultipleDocuments(updatedList, checkedList)
-        }
-    }
-
-    private suspend fun updateSingleDocument(document: Document) {
-        val body: String? = rowMapper.fromBody(document)
-
-        val rowsUpdated: Long = detectConflict({ document.id }) {
-            withConnection { connection ->
-                val sql: String = if (document.version == 0L) insertSql else updateNoWaitSql
-
-                connection.createStatement(sql)
-                    .bindWrite(document, body)
-                    .rowsUpdated()
-                    .single()
-            }
-        }
-
-        if (rowsUpdated == 0L) {
-            throw UpdateConflictException(document.id)
-        }
-    }
-
-    private suspend fun updateMultipleDocuments(updatedDocuments: List<Document>, checkedDocuments: List<Document>) {
-        // Serialize first, so that an invalid document fails before anything is written
-        val bodies: Map<DocumentKey, String?> = updatedDocuments.associate { it.id to rowMapper.fromBody(it) }
-        val updatedVersions: Map<DocumentKey, Long> = updatedDocuments.associate { it.id to it.version }
+        val updatedVersions: Map<DocumentKey, Long> = updatedList.associate { it.id to it.version }
 
         // A document that is both updated and checked is only processed once
-        val checkedOnly: List<Document> = checkedDocuments.filter { document ->
+        val checkedList: List<Document> = checkedDocuments.filter { document ->
             val updatedVersion: Long? = updatedVersions[document.id]
 
             if (updatedVersion != null && updatedVersion != document.version) {
@@ -121,110 +90,64 @@ class YugabyteDbDocumentStore(
             updatedVersion == null
         }
 
-        val documents: List<Document> = updatedDocuments + checkedOnly
-        val ids: List<DocumentKey> = documents.map { it.id }.distinct()
-
-        detectConflict({ findLockedDocument(ids) ?: ids[0] }) {
-            withTransaction { connection ->
-                // Lock the existing documents, so that a concurrent write to any of them causes a conflict
-                val versions: Map<DocumentKey, Long> = lockDocuments(connection, ids)
-
-                val outdated: Document? = documents.firstOrNull { (versions[it.id] ?: 0L) != it.version }
-                if (outdated != null) {
-                    throw UpdateConflictException(outdated.id)
-                }
-
-                val (inserted: List<Document>, updated: List<Document>) = updatedDocuments.partition { it.version == 0L }
-                write(connection, insertSql, inserted) { bindWrite(it, bodies[it.id]) }
-                write(connection, updateSql, updated) { bindWrite(it, bodies[it.id]) }
-
-                // Insert then delete a placeholder, so that a concurrent insert of the same document causes a conflict
-                val missing: List<Document> = checkedOnly.filter { it.version == 0L }
-                write(connection, insertSql, missing) { bindPlaceholder(it.id) }
-                write(connection, deleteSql, missing) { bindKey(it.id).bind(2, 0L) }
-            }
-        }
-    }
-
-    /**
-     * Locks the rows of the documents that exist, failing if any of them is locked by another transaction, and returns
-     * their versions.
-     */
-    private suspend fun lockDocuments(connection: Connection, ids: List<DocumentKey>): Map<DocumentKey, Long> =
-        connection.createStatement("$lockSql WHERE ${keysFilter(ids.size)} FOR UPDATE NOWAIT")
-            .bindKeys(ids)
-            .rows { row -> rowMapper.toDocumentKey(row) to rowMapper.toVersion(row) }
-            .toList()
-            .toMap()
-
-    /**
-     * Executes the statement once for each document, failing if any of the documents is not written.
-     */
-    private suspend fun write(
-        connection: Connection,
-        sql: String,
-        documents: List<Document>,
-        bind: Statement.(Document) -> Statement,
-    ) {
+        val documents: List<Document> = updatedList + checkedList
         if (documents.isEmpty()) {
             return
         }
 
-        val statement: Statement = connection.createStatement(sql)
-        documents.forEachIndexed { index, document ->
-            if (index > 0) {
-                statement.add()
-            }
-            statement.bind(document)
-        }
+        val operations: String = fromDocuments(updatedList, checkedList)
 
-        val notWritten: Int = statement.rowsUpdated().toList().indexOf(0L)
-        if (notWritten >= 0) {
-            throw UpdateConflictException(documents[notWritten].id)
+        val conflict: Int =
+            try {
+                withConnection { connection ->
+                    connection.createStatement(updateSql)
+                        .bind(0, operations)
+                        .rows { row -> checkNotNull(row.get(0, Int::class.javaObjectType)) }
+                        .single()
+                }
+            } catch (exception: R2dbcException) {
+                // The conflict has been detected by the database rather than by the function
+                if (exception.sqlState.orEmpty() in conflictStates) {
+                    throw UpdateConflictException(documents[0].id)
+                } else {
+                    throw exception
+                }
+            }
+
+        if (conflict >= 0) {
+            throw UpdateConflictException(documents[conflict].id)
         }
     }
 
     /**
-     * Finds the first document that is locked by another transaction.
+     * Returns the parameter of the update function, which is a JSON array with an element of the form
+     * `{ partition_key, local_key, version, body, check }` for each document, where `version` is the expected version
+     * of the document, `body` is the new body of the document, or null if the document is deleted, and `check`
+     * indicates that the version of the document is checked without the document being modified.
      */
-    private suspend fun findLockedDocument(ids: List<DocumentKey>): DocumentKey? =
-        ids.firstOrNull { id ->
-            try {
-                withTransaction { connection -> lockDocuments(connection, listOf(id)) }
-                false
-            } catch (exception: R2dbcException) {
-                if (isConflict(exception)) true else throw exception
-            }
-        }
+    private fun fromDocuments(updatedDocuments: List<Document>, checkedDocuments: List<Document>): String {
+        val operations: List<JsonObject> =
+            updatedDocuments.map { fromDocument(it, it.body, false) } +
+                checkedDocuments.map { fromDocument(it, null, true) }
 
-    private inline fun <T> detectConflict(id: () -> DocumentKey, action: () -> T): T =
-        try {
-            action()
-        } catch (exception: R2dbcException) {
-            if (isConflict(exception)) {
-                throw UpdateConflictException(id())
-            } else {
-                throw exception
-            }
-        }
-
-    private fun isConflict(exception: R2dbcException): Boolean =
-        exception.sqlState.orEmpty() in conflictStates
-
-    private fun Statement.bindWrite(document: Document, body: String?): Statement {
-        bindKey(document.id).bind(2, document.version + 1)
-
-        if (body == null) {
-            bindNull(3, String::class.java)
-        } else {
-            bind(3, body)
-        }
-
-        return if (document.version == 0L) this else bind(4, document.version)
+        return JsonArray(operations).toString()
     }
 
-    private fun Statement.bindPlaceholder(id: DocumentKey): Statement =
-        bindKey(id).bind(2, 0L).bindNull(3, String::class.java)
+    private fun fromDocument(document: Document, body: JsonElement?, check: Boolean): JsonObject {
+        require(body == null || body is JsonObject) {
+            "The document must be a valid JSON object"
+        }
+
+        return JsonObject(
+            mapOf(
+                PARTITION_KEY to JsonPrimitive(document.id.partitionKey),
+                LOCAL_KEY to JsonPrimitive(document.id.localKey),
+                VERSION to JsonPrimitive(document.version),
+                BODY to (body ?: JsonNull),
+                CHECK to JsonPrimitive(check),
+            )
+        )
+    }
 
     //endregion
 
@@ -244,7 +167,7 @@ class YugabyteDbDocumentStore(
         val distinctIds: List<DocumentKey> = idList.distinct()
 
         val documents: Map<DocumentKey, Document> = withConnection { connection ->
-            connection.createStatement("$selectSql WHERE ${keysFilter(distinctIds.size)}")
+            connection.createStatement(selectKeysSql(distinctIds.size))
                 .bindKeys(distinctIds)
                 .rows(rowMapper::toDocument)
                 .toList()
@@ -306,6 +229,9 @@ class YugabyteDbDocumentStore(
      *
      * The table is initially split into the given number of [tablets], each holding an equal share of the hashes.
      * Tablets are then split automatically as they grow, including within a partition.
+     *
+     * The function used to update the documents of the table is created along with the table, or replaced if it
+     * already exists. It has the name of the table followed by `_update`.
      */
     suspend fun createTable(tablets: Int = 1) {
         require(tablets in 1..HASH_COUNT) {
@@ -319,24 +245,100 @@ class YugabyteDbDocumentStore(
                 " SPLIT AT VALUES (${(1 until tablets).joinToString { i -> "(${HASH_COUNT * i / tablets})" }})"
             }
 
+        val createTableSql: String =
+            """
+            CREATE TABLE IF NOT EXISTS $table (
+                $PARTITION_HASH INT NOT NULL,
+                $PARTITION_KEY TEXT COLLATE "C" NOT NULL,
+                $LOCAL_KEY TEXT COLLATE "C" NOT NULL,
+                $VERSION BIGINT NOT NULL,
+                $BODY JSONB,
+                PRIMARY KEY ($PARTITION_HASH ASC, $PARTITION_KEY ASC, $LOCAL_KEY ASC),
+                CHECK ($PARTITION_HASH = yb_hash_code($PARTITION_KEY))
+            )$split
+            """.trimIndent()
+
         withConnection { connection ->
-            connection
-                .createStatement(
-                    """
-                    CREATE TABLE IF NOT EXISTS $table (
-                        $PARTITION_HASH INT NOT NULL,
-                        $PARTITION_KEY TEXT COLLATE "C" NOT NULL,
-                        $LOCAL_KEY TEXT COLLATE "C" NOT NULL,
-                        $VERSION BIGINT NOT NULL,
-                        $BODY JSONB,
-                        PRIMARY KEY ($PARTITION_HASH ASC, $PARTITION_KEY ASC, $LOCAL_KEY ASC),
-                        CHECK ($PARTITION_HASH = yb_hash_code($PARTITION_KEY))
-                    )$split
-                    """.trimIndent()
-                )
-                .rowsUpdated()
-                .toList()
+            connection.createStatement(createTableSql).rowsUpdated().toList()
+            connection.createStatement(createFunctionSql()).rowsUpdated().toList()
         }
+    }
+
+    /**
+     * Returns the definition of the function updating the documents described by its parameter (see [fromDocuments]).
+     *
+     * The function returns -1 when the documents have been updated. When a document doesn't have the expected version
+     * or is locked by another transaction, none of the documents is updated, and the function returns the index of
+     * that document. The function runs in the transaction of the statement calling it, so the update is atomic.
+     */
+    private fun createFunctionSql(): String {
+        val rowFilter =
+            "$PARTITION_HASH = v_partition_hash AND $PARTITION_KEY = v_partition_key AND $LOCAL_KEY = v_local_key"
+
+        return """
+            CREATE OR REPLACE FUNCTION $updateFunction(p_operations JSONB) RETURNS INT
+            LANGUAGE plpgsql AS $$
+            DECLARE
+                v_index INT := 0;
+                v_operation JSONB;
+                v_partition_hash INT;
+                v_partition_key TEXT;
+                v_local_key TEXT;
+                v_check BOOLEAN;
+                v_body JSONB;
+                v_expected_version BIGINT;
+                v_current_version BIGINT;
+                v_rows INT;
+            BEGIN
+                -- The changes made in this block are rolled back when the block fails
+                BEGIN
+                    FOR v_operation IN
+                        SELECT value FROM jsonb_array_elements(p_operations) WITH ORDINALITY ORDER BY ordinality
+                    LOOP
+                        v_partition_key := v_operation->>'$PARTITION_KEY';
+                        v_local_key := v_operation->>'$LOCAL_KEY';
+                        v_partition_hash := yb_hash_code(v_partition_key);
+                        v_check := (v_operation->>'$CHECK')::BOOLEAN;
+                        v_body := NULLIF(v_operation->'$BODY', 'null'::JSONB);
+                        v_expected_version := (v_operation->>'$VERSION')::BIGINT;
+                        v_current_version := NULL;
+
+                        -- Lock the document without waiting, so that a concurrent write to it causes a conflict
+                        SELECT $VERSION INTO v_current_version FROM $table WHERE $rowFilter FOR UPDATE NOWAIT;
+
+                        IF COALESCE(v_current_version, 0) <> v_expected_version THEN
+                            RAISE EXCEPTION USING ERRCODE = '$UPDATE_CONFLICT';
+                        END IF;
+
+                        IF v_current_version IS NULL THEN
+                            INSERT INTO $table ($PARTITION_HASH, $PARTITION_KEY, $LOCAL_KEY, $VERSION, $BODY)
+                            VALUES (v_partition_hash, v_partition_key, v_local_key, 1, v_body)
+                            ON CONFLICT DO NOTHING;
+
+                            GET DIAGNOSTICS v_rows = ROW_COUNT;
+                            IF v_rows = 0 THEN
+                                RAISE EXCEPTION USING ERRCODE = '$UPDATE_CONFLICT';
+                            END IF;
+
+                            -- A checked document that doesn't exist is inserted then deleted, so that a concurrent
+                            -- insert of the same document causes a conflict
+                            IF v_check THEN
+                                DELETE FROM $table WHERE $rowFilter;
+                            END IF;
+                        ELSIF NOT v_check THEN
+                            UPDATE $table SET $VERSION = v_expected_version + 1, $BODY = v_body WHERE $rowFilter;
+                        END IF;
+
+                        v_index := v_index + 1;
+                    END LOOP;
+                EXCEPTION WHEN SQLSTATE '$UPDATE_CONFLICT' OR lock_not_available OR unique_violation THEN
+                    RETURN v_index;
+                END;
+
+                RETURN -1;
+            END
+            $$
+            """.trimIndent()
     }
 
     private suspend fun <T> withConnection(action: suspend (Connection) -> T): T {
@@ -351,22 +353,6 @@ class YugabyteDbDocumentStore(
         }
     }
 
-    private suspend fun <T> withTransaction(action: suspend (Connection) -> T): T =
-        withConnection { connection ->
-            connection.beginTransaction(IsolationLevel.READ_COMMITTED).awaitFirstOrNull()
-
-            try {
-                val result: T = action(connection)
-                connection.commitTransaction().awaitFirstOrNull()
-                result
-            } catch (exception: Throwable) {
-                withContext(NonCancellable) {
-                    runCatching { connection.rollbackTransaction().awaitFirstOrNull() }
-                }
-                throw exception
-            }
-        }
-
     private fun Statement.rowsUpdated(): Flow<Long> =
         execute().asFlow().map { result -> result.rowsUpdated.awaitFirstOrNull() ?: 0L }
 
@@ -376,9 +362,6 @@ class YugabyteDbDocumentStore(
         }
     }
 
-    private fun Statement.bindKey(id: DocumentKey): Statement =
-        bind(0, id.partitionKey).bind(1, id.localKey)
-
     private fun Statement.bindKeys(ids: List<DocumentKey>): Statement {
         ids.forEachIndexed { index, id ->
             bind(index * 2, id.partitionKey).bind(index * 2 + 1, id.localKey)
@@ -387,16 +370,15 @@ class YugabyteDbDocumentStore(
         return this
     }
 
-    // An equality on the whole primary key lets each row be read directly
-    private fun keysFilter(count: Int): String =
-        if (count == 1) {
-            keyFilter
-        } else {
-            val keys: String = (0 until count).joinToString { i ->
-                val partitionKey = "$${i * 2 + 1}"
-                "(${hash(partitionKey)}, $partitionKey, $${i * 2 + 2})"
-            }
-            "($PARTITION_HASH, $PARTITION_KEY, $LOCAL_KEY) IN ($keys)"
+    // Each row is read directly using an equality on the whole primary key, whereas a single condition matching all
+    // the keys can result in the whole table being read
+    private fun selectKeysSql(count: Int): String =
+        (0 until count).joinToString(" UNION ALL ") { i ->
+            val partitionKey = "$${i * 2 + 1}"
+            val localKey = "$${i * 2 + 2}"
+
+            "$selectSql WHERE $PARTITION_HASH = ${hash(partitionKey)} " +
+                "AND $PARTITION_KEY = $partitionKey AND $LOCAL_KEY = $localKey"
         }
 
     // The hash used by YugabyteDB for hash sharding, which is evenly distributed between 0 and HASH_COUNT - 1

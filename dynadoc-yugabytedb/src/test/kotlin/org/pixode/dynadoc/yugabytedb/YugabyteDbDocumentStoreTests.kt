@@ -57,7 +57,6 @@ class YugabyteDbDocumentStoreTests {
     private val store: YugabyteDbDocumentStore = YugabyteDbDocumentStore(connectionFactory, TABLE)
     private val partitionKey: String = UUID.randomUUID().toString()
     private val ids: List<DocumentKey> = (0..10).map { i -> DocumentKey("${partitionKey}_$i", "0000") }
-    private val rowMapper = RowMapper()
 
     //region updateDocuments
 
@@ -365,6 +364,25 @@ class YugabyteDbDocumentStoreTests {
         assertEquals(ids[1], exception.id)
     }
 
+    @Test
+    fun updateDocuments_largeBatch() = runBlocking {
+        val documents = (0..499).map { i ->
+            parseDocument(DocumentKey(partitionKey, "ABC%04d".format(i)), """ {"a":$i} """, 0)
+        }
+        store.updateDocuments(*documents.toTypedArray())
+        store.updateDocuments(
+            updatedDocuments = documents.take(250).map { it.copy(version = 1) },
+            checkedDocuments = documents.drop(250).map { it.copy(version = 1) },
+        )
+
+        val result: List<Document> = store.scan(partitionKey).toList()
+
+        assertEquals(500, result.size)
+        repeat(500) { i ->
+            assertDocument(result[i], documents[i].id, documents[i].body.toString(), if (i < 250) 2 else 1)
+        }
+    }
+
     @ParameterizedTest
     @ValueSource(booleans = [true, false])
     fun updateDocuments_multipleDocumentsConcurrentTransaction(checkOnly: Boolean) = runBlocking {
@@ -535,7 +553,7 @@ class YugabyteDbDocumentStoreTests {
                 .bind(0, document.id.partitionKey)
                 .bind(1, document.id.localKey)
                 .bind(2, document.version + 1)
-                .bind(3, checkNotNull(rowMapper.fromBody(document)))
+                .bind(3, checkNotNull(document.body).toString())
                 .execute()
                 .awaitSingle()
                 .rowsUpdated
