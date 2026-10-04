@@ -2,7 +2,7 @@
 
 <a href="https://central.sonatype.com/artifact/org.pixode/dynadoc">![Maven Central Version](https://img.shields.io/maven-central/v/org.pixode/dynadoc)</a>
 
-Dynadoc is a Kotlin library for using DynamoDB, MongoDB, TiKV or YugabyteDB as a JSON document store. It manages the mapping between Kotlin objects and JSON documents.
+Dynadoc is a Kotlin library for using DynamoDB, MongoDB, TiKV, TiDB or YugabyteDB as a JSON document store. It manages the mapping between Kotlin objects and JSON documents.
 
 ## Concepts
 
@@ -35,6 +35,32 @@ With TiKV, each document is stored as a single key-value pair:
 - The value is a UTF-8 encoded JSON object of the form `{ partition_key, local_key, version, body }`, where `partition_key` and `local_key` hold the partition key and local key, `version` the version of the document and `body` the JSON document. Since the body is nested, there are no reserved field names.
 
 Deleted documents are kept with a `null` body so that their version is preserved. TiKV transactions don't support TTLs, so they are never removed automatically.
+
+### TiDB mapping
+
+With TiDB, each document is stored as a row of a table with the following schema:
+
+```sql
+CREATE TABLE documents (
+    partition_hash BIGINT NOT NULL,
+    partition_key VARCHAR(255) CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_bin NOT NULL,
+    local_key VARCHAR(255) CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_bin NOT NULL,
+    version BIGINT NOT NULL,
+    body JSON,
+    PRIMARY KEY (partition_hash, partition_key, local_key) CLUSTERED
+);
+```
+
+- `partition_hash` holds the hash of the partition key, as computed by the `CRC32` function of TiDB. It is set by the database when a document is written.
+- `partition_key` and `local_key` hold the partition key and the local key, which are limited to 255 characters. The `utf8mb4_0900_bin` collation sorts keys by their UTF-8 encoding, and doesn't ignore trailing spaces.
+- `version` is an integer representing the version of the document, for optimistic concurrency management purposes.
+- `body` holds the JSON document. Since the body has its own column, there are no reserved field names.
+
+The primary key is clustered and starts with the hash of the partition key. Partitions are therefore spread evenly across the regions, even when partition keys are increasing values such as timestamps or sequence numbers. The documents of a partition are stored together and sorted by local key.
+
+The `JSON` type of TiDB stores numbers that are not integers as double-precision floating-point numbers, so a number such as `1234567890.0987654321` is read back as `1234567890.0987654`.
+
+Deleted documents are kept with a `NULL` body so that their version is preserved. They are never removed automatically.
 
 ### YugabyteDB mapping
 
@@ -107,6 +133,8 @@ The core `dynadoc` library does not depend on the AWS SDK. `DynamoDbDocumentStor
 To use MongoDB instead, add a dependency to [dynadoc-mongodb](https://central.sonatype.com/artifact/org.pixode/dynadoc-mongodb), which references the MongoDB Kotlin coroutine driver. `MongoDbDocumentStore` is in the `org.pixode.dynadoc.mongodb` package. See [Using MongoDB](#using-mongodb).
 
 To use TiKV, add a dependency to `dynadoc-tikv`, which references the TiKV Java client. `TiKVDocumentStore` is in the `org.pixode.dynadoc.tikv` package. See [Using TiKV](#using-tikv).
+
+To use TiDB, add a dependency to `dynadoc-tidb`, which references the R2DBC SPI. `TiDbDocumentStore` is in the `org.pixode.dynadoc.tidb` package. See [Using TiDB](#using-tidb).
 
 To use YugabyteDB, add a dependency to `dynadoc-yugabytedb`, which references the R2DBC SPI. `YugabyteDbDocumentStore` is in the `org.pixode.dynadoc.yugabytedb` package. See [Using YugabyteDB](#using-yugabytedb).
 
@@ -374,6 +402,66 @@ val entities: Flow<JsonEntity<Product?>> = result.map(DefaultJsonSerializer::fro
 ```
 
 Reads use a snapshot at the latest timestamp, so they are strongly consistent.
+
+## Using TiDB
+
+`TiDbDocumentStore` implements the same `DocumentStore` interface, using the MySQL protocol of TiDB through R2DBC.
+
+```kotlin
+val connectionFactory: ConnectionFactory =
+    ConnectionFactories.get("r2dbc:mysql://user:password@host:4000/database")
+
+val documentStore = TiDbDocumentStore(connectionFactory, "documents")
+
+// Create the table, clustered by hash of the partition key, partition key then local key
+documentStore.createTable()
+
+val entityStore = EntityStore(documentStore, DefaultJsonSerializer)
+```
+
+The module only depends on the R2DBC SPI, so an R2DBC driver for MySQL, such as `io.asyncer:r2dbc-mysql`, must be added to the project. The driver must send statements using the text protocol and allow several statements in a request, which is the default with `r2dbc-mysql`. Every operation takes a connection from the `ConnectionFactory` and closes it when it completes, so a connection pool such as `r2dbc-pool` should be used.
+
+The table name can be qualified with a database, as in `"database.documents"`. TiDB 7.4 or later is required.
+
+### Concurrency
+
+TiDB doesn't support stored procedures, so documents are updated by a script made of several statements, which are sent together to the database, with the documents as a single JSON parameter. An update, whether of a single document or of multiple documents (for example with `EntityStore.transaction`), therefore takes a single round trip to the database and runs as a single pessimistic transaction. An update is limited to 10,000 documents.
+
+The script locks the rows of the documents, checks their versions, then writes the documents. Checked documents are locked without being modified, so that a concurrent write to any of the documents causes an `UpdateConflictException`. When a document doesn't have the expected version, nothing is written.
+
+An update that finds one of its documents locked by another update still in progress fails immediately with an `UpdateConflictException`, rather than waiting for the other update to complete. The script is then interrupted, and its transaction is rolled back with a second request. TiDB doesn't indicate which document is locked, so the exception refers to the first document of the update. Under contention, using a `RetryPolicy` with `transaction` retries the update with fresh versions of the documents.
+
+The only case in which an update waits is when another update in progress is creating the same document, as there is no row to lock yet. It then fails with an `UpdateConflictException` if the other update is committed.
+
+### Queries
+
+The documents of a partition can be retrieved, sorted by local key, using the `scan` method. The range of local keys is optional, with an inclusive start and an exclusive end:
+
+```kotlin
+val result = documentStore.scan("products", startLocalKey = "A", endLocalKey = "M")
+
+val entities: Flow<JsonEntity<Product?>> = result.map(DefaultJsonSerializer::fromDocument)
+```
+
+Custom queries can be performed using the `query` method, which takes the condition of a `WHERE` clause and the values of its parameters. The condition can refer to the columns of the table, and use the [JSON functions](https://docs.pingcap.com/tidb/stable/json-functions) on the `body` column:
+
+```kotlin
+val result = documentStore.query(
+    """
+    partition_hash = CRC32(?) AND partition_key = ?
+    AND body->'$.price' BETWEEN ? AND ?
+    ORDER BY local_key
+    """,
+    "products",
+    "products",
+    100,
+    250,
+)
+```
+
+To read a partition directly, the condition must specify both the hash of the partition key and the partition key, as above. A condition on `partition_key` alone, or on a range of partition keys, reads the whole table, since partitions are stored in the order of their hashes.
+
+Both methods include deleted documents, which have a `NULL` body. They can be excluded from a query by adding `body IS NOT NULL` to the condition.
 
 ## Using YugabyteDB
 
