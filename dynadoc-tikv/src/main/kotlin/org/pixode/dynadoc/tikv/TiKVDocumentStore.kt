@@ -15,7 +15,6 @@ import org.tikv.common.TiSession
 import org.tikv.common.exception.KeyException
 import org.tikv.common.exception.RegionException
 import org.tikv.common.exception.TiClientInternalException
-import org.tikv.common.exception.WriteConflictException as CommonWriteConflictException
 import org.tikv.common.meta.TiTimestamp
 import org.tikv.common.operation.KVErrorHandler
 import org.tikv.common.operation.iterator.ConcreteScanIterator
@@ -30,6 +29,7 @@ import org.tikv.kvproto.Kvrpcpb
 import org.tikv.kvproto.Kvrpcpb.Mutation
 import org.tikv.kvproto.TikvGrpc
 import org.tikv.shade.com.google.protobuf.ByteString
+import org.tikv.common.exception.WriteConflictException as CommonWriteConflictException
 import org.tikv.txn.exception.WriteConflictException as TxnWriteConflictException
 
 private const val LOCK_TTL_MS = 3000L
@@ -73,82 +73,93 @@ class TiKVDocumentStore(
 
     private fun commitTransaction(updatedDocuments: List<Document>, checkedDocuments: List<Document>) {
         // Serialize first, so that an invalid document fails before anything is written
-        val updatedValues: List<ByteString> = updatedDocuments.map { ByteString.copyFrom(valueMapper.fromDocument(it)) }
-        val documents: List<Document> = updatedDocuments + checkedDocuments
-        val keys: List<ByteString> = documents.map { ByteString.copyFrom(keyMapper.fromDocumentKey(it.id)) }
+        val documents: List<RawDocument> =
+            updatedDocuments.map {
+                RawDocument(it, rawKey(it), ByteString.copyFrom(valueMapper.fromDocument(it)))
+            } + checkedDocuments.map {
+                RawDocument(it, rawKey(it), null)
+            }
 
-        val startTs: TiTimestamp = session.timestamp
-        val currentValues: Map<ByteString, ByteString> = batchGet(keys, startTs)
+        val startTimestamp: TiTimestamp = session.timestamp
+        val currentValues: Map<ByteString, ByteString> = batchGet(documents.map { it.rawKey }, startTimestamp)
 
-        val outdated: Int? = documents.indices.firstOrNull { i ->
-            currentVersion(currentValues[keys[i]]) != documents[i].version
+        documents.forEach {
+            if (currentVersion(currentValues[it.rawKey]) != it.document.version) {
+                throw UpdateConflictException(it.document.id)
+            }
         }
 
-        if (outdated != null) {
-            throw UpdateConflictException(documents[outdated].id)
+        val mutations = mutableMapOf<ByteString, Mutation>()
+        for (document in documents) {
+            if (document.rawValue != null) {
+                mutations[document.rawKey] = mutation(Kvrpcpb.Op.Put, document.rawKey, document.rawValue)
+            } else {
+                // Lock the checked documents, so that a concurrent write to any of them causes a conflict
+                mutations.getOrPut(document.rawKey) { mutation(Kvrpcpb.Op.Lock, document.rawKey, ByteString.EMPTY) }
+            }
         }
 
-        val mutations = LinkedHashMap<ByteString, Mutation>()
-        for (i in updatedDocuments.indices) {
-            mutations[keys[i]] = mutation(Kvrpcpb.Op.Put, keys[i], updatedValues[i])
-        }
-        // Lock the checked documents, so that a concurrent write to any of them causes a conflict
-        for (i in updatedDocuments.size until documents.size) {
-            mutations.getOrPut(keys[i]) { mutation(Kvrpcpb.Op.Lock, keys[i], ByteString.EMPTY) }
-        }
-
-        val primaryKey: ByteString = keys[0]
+        val primary: RawDocument = documents.first()
+        val primaryKey: ByteString = primary.rawKey
         val backOffer: BackOffer = ConcreteBackOffer.newCustomBackOff(WRITE_MAX_BACKOFF_MS)
 
         try {
             // The primary key is written first, as the status of the transaction is determined by its lock
             val prewriteBackOffer = NoLockWaitBackOffer(backOffer)
-            prewrite(prewriteBackOffer, primaryKey, listOf(mutations.getValue(primaryKey)), startTs)
-            prewrite(prewriteBackOffer, primaryKey, mutations.values.drop(1), startTs)
+            prewrite(prewriteBackOffer, primaryKey, listOf(mutations.getValue(primaryKey)), startTimestamp)
+            prewrite(prewriteBackOffer, primaryKey, mutations.values.drop(1), startTimestamp)
         } catch (exception: RuntimeException) {
             // The primary key is not committed, so the transaction can be abandoned
-            rollback(mutations.keys.toList(), startTs)
+            rollback(mutations.keys.toList(), startTimestamp)
 
             if (exception is LockedKeyException) {
-                val index: Int = keys.indexOf(exception.key)
-                throw UpdateConflictException(documents[maxOf(index, 0)].id)
+                val locked: RawDocument = documents.firstOrNull { it.rawKey == exception.key } ?: primary
+                throw UpdateConflictException(locked.document.id)
             } else if (isWriteConflict(exception)) {
-                throw UpdateConflictException(findConflict(documents, keys, currentValues))
+                throw UpdateConflictException(findConflict(documents, currentValues))
             } else {
                 throw exception
             }
         }
 
-        val commitTs: TiTimestamp = session.timestamp
+        val commitTimestamp: TiTimestamp = session.timestamp
 
         try {
             // The transaction is committed once the primary key is committed
-            commit(backOffer, listOf(primaryKey), startTs, commitTs)
+            commit(backOffer, listOf(primaryKey), startTimestamp, commitTimestamp)
         } catch (_: KeyException) {
             // The lock has expired and the transaction has been rolled back by another transaction, or the commit
             // timestamp is too old: either way, the transaction has not been committed
-            rollback(mutations.keys.toList(), startTs)
-            throw UpdateConflictException(documents[0].id)
+            rollback(mutations.keys.toList(), startTimestamp)
+            throw UpdateConflictException(primary.document.id)
         }
 
         try {
-            commit(backOffer, mutations.keys.drop(1), startTs, commitTs)
+            commit(backOffer, mutations.keys.drop(1), startTimestamp, commitTimestamp)
         } catch (_: Exception) {
             // The remaining locks are resolved by readers using the status of the primary key
         }
     }
 
-    private fun prewrite(backOffer: BackOffer, primaryKey: ByteString, mutations: List<Mutation>, startTs: TiTimestamp) =
-        forEachRegion(backOffer, mutations, Mutation::getKey) { region, store, regionMutations ->
-            session.regionStoreClientBuilder.build(region, store)
-                .prewrite(backOffer, primaryKey, regionMutations, startTs.version, LOCK_TTL_MS)
-        }
+    private fun prewrite(
+        backOffer: BackOffer,
+        primaryKey: ByteString,
+        mutations: List<Mutation>,
+        startTimestamp: TiTimestamp,
+    ) = forEachRegion(backOffer, mutations, Mutation::getKey) { region, store, regionMutations ->
+        session.regionStoreClientBuilder.build(region, store)
+            .prewrite(backOffer, primaryKey, regionMutations, startTimestamp.version, LOCK_TTL_MS)
+    }
 
-    private fun commit(backOffer: BackOffer, keys: List<ByteString>, startTs: TiTimestamp, commitTs: TiTimestamp) =
-        forEachRegion(backOffer, keys, { it }) { region, store, regionKeys ->
-            session.regionStoreClientBuilder.build(region, store)
-                .commit(backOffer, regionKeys, startTs.version, commitTs.version)
-        }
+    private fun commit(
+        backOffer: BackOffer,
+        keys: List<ByteString>,
+        startTimestamp: TiTimestamp,
+        commitTimestamp: TiTimestamp,
+    ) = forEachRegion(backOffer, keys, { it }) { region, store, regionKeys ->
+        session.regionStoreClientBuilder.build(region, store)
+            .commit(backOffer, regionKeys, startTimestamp.version, commitTimestamp.version)
+    }
 
     /**
      * A [BackOffer] that fails with a [LockedKeyException] instead of waiting for a lock during a prewrite.
@@ -183,7 +194,7 @@ class TiKVDocumentStore(
      * Rolls back the locks of an abandoned transaction, so that other transactions don't wait for them to expire.
      * This is a best effort: locks that can't be rolled back are resolved by other transactions once they expire.
      */
-    private fun rollback(keys: List<ByteString>, startTs: TiTimestamp) {
+    private fun rollback(keys: List<ByteString>, startTimestamp: TiTimestamp) {
         val backOffer: BackOffer = ConcreteBackOffer.newCustomBackOff(ROLLBACK_MAX_BACKOFF_MS)
 
         try {
@@ -196,7 +207,7 @@ class TiKVDocumentStore(
                     { response -> if (response.hasRegionError()) response.regionError else null },
                     { response -> if (response.hasError()) response.error else null },
                     { null },
-                    startTs.version,
+                    startTimestamp.version,
                     false,
                 )
 
@@ -206,7 +217,7 @@ class TiKVDocumentStore(
                     {
                         Kvrpcpb.BatchRollbackRequest.newBuilder()
                             .setContext(client.region.leaderContext)
-                            .setStartVersion(startTs.version)
+                            .setStartVersion(startTimestamp.version)
                             .addAllKeys(regionKeys)
                             .build()
                     },
@@ -227,8 +238,10 @@ class TiKVDocumentStore(
             when (cause) {
                 is TxnWriteConflictException, is CommonWriteConflictException -> true
                 is KeyException -> cause.keyErr?.let { it.hasConflict() || it.hasAlreadyExist() }
-                    // The client sometimes creates the exception from the text of the key error only
-                    ?: cause.message.orEmpty().let { it.contains("conflict", ignoreCase = true) || "already_exist" in it }
+                // The client sometimes creates the exception from the text of the key error only
+                    ?: cause.message.orEmpty()
+                        .let { it.contains("conflict", ignoreCase = true) || "already_exist" in it }
+
                 else -> false
             }
         }
@@ -277,16 +290,19 @@ class TiKVDocumentStore(
     /**
      * Finds the first document that has been modified since it was read, defaulting to the first document.
      */
-    private fun findConflict(
-        documents: List<Document>,
-        keys: List<ByteString>,
-        previousValues: Map<ByteString, ByteString>,
-    ): DocumentKey {
-        val latestValues: Map<ByteString, ByteString> = batchGet(keys, session.timestamp)
-        val index: Int = keys.indexOfFirst { key -> latestValues[key] != previousValues[key] }
+    private fun findConflict(documents: List<RawDocument>, previousValues: Map<ByteString, ByteString>): DocumentKey {
+        val latestValues: Map<ByteString, ByteString> = batchGet(documents.map { it.rawKey }, session.timestamp)
+        val modified: RawDocument? = documents.firstOrNull { latestValues[it.rawKey] != previousValues[it.rawKey] }
 
-        return documents[maxOf(index, 0)].id
+        return (modified ?: documents.first()).document.id
     }
+
+    /**
+     * A document along with its TiKV key and, if the document is updated rather than only checked, its TiKV value.
+     */
+    private class RawDocument(val document: Document, val rawKey: ByteString, val rawValue: ByteString?)
+
+    private fun rawKey(document: Document): ByteString = ByteString.copyFrom(keyMapper.fromDocumentKey(document.id))
 
     private fun currentVersion(value: ByteString?): Long =
         if (value == null) 0 else valueMapper.toDocument(value.toByteArray()).version

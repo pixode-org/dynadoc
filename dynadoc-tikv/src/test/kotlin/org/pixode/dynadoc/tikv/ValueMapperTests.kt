@@ -35,7 +35,15 @@ class ValueMapperTests {
     }
 
     @ParameterizedTest
-    @ValueSource(strings = [""" "a" """, """ 10 """, """ true """, """ null """, """ ["a"] """])
+    @ValueSource(
+        strings = [
+            """ "a" """,
+            """ 10 """,
+            """ true """,
+            """ null """,
+            """ ["a"] """,
+        ]
+    )
     fun fromDocument_invalidBody(body: String) {
         assertThrows<IllegalArgumentException> {
             valueMapper.fromDocument(parseDocument(id, body, 0))
