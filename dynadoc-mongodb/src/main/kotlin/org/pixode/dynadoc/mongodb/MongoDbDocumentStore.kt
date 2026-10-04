@@ -30,6 +30,7 @@ import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.toList
 import org.bson.BsonDocument
+import org.bson.BsonString
 import org.bson.conversions.Bson
 import org.pixode.dynadoc.core.Document
 import org.pixode.dynadoc.core.DocumentKey
@@ -38,6 +39,7 @@ import org.pixode.dynadoc.core.UpdateConflictException
 
 private const val DUPLICATE_KEY_ERROR = 11000
 private const val WRITE_CONFLICT_ERROR = 112
+private const val ADMIN_DATABASE = "admin"
 
 /**
  * Represents an implementation of the [DocumentStore] interface that relies on MongoDB for persistence.
@@ -274,13 +276,26 @@ class MongoDbDocumentStore(
     /**
      * Creates the collection as a clustered collection ordered by document key, along with a TTL index on deleted
      * documents.
+     * If [sharded] is true, the collection is also sharded by hashed partition key then ascending local key, which
+     * requires a sharded cluster.
      */
-    suspend fun createCollection() {
+    suspend fun createCollection(sharded: Boolean = true) {
         database.createCollection(
             namespace.collectionName,
             CreateCollectionOptions().clusteredIndexOptions(ClusteredIndexOptions(Indexes.ascending(ID), true)),
         )
         collection.createIndex(Indexes.ascending(DELETED), IndexOptions().expireAfter(0, TimeUnit.SECONDS))
+
+        if (sharded) {
+            val shardKey: Bson = Indexes.compoundIndex(
+                Indexes.hashed("$ID.$PARTITION_KEY"),
+                Indexes.ascending("$ID.$LOCAL_KEY"),
+            )
+            client.getDatabase(ADMIN_DATABASE).runCommand(
+                BsonDocument("shardCollection", BsonString(namespace.fullName))
+                    .append("key", shardKey.toBsonDocument()),
+            )
+        }
     }
 
     // An equality on the whole _id is enough for the query to be routed to a single shard

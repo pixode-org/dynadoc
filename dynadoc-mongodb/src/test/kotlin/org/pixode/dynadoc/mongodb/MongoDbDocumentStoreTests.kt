@@ -617,13 +617,13 @@ class MongoDbDocumentStoreTests {
 
         @JvmStatic
         @Container
-        private val container = MongoDBContainer("mongo:8.0").withReplicaSet()
+        private val container = MongoDBContainer("mongo:8.0").withSharding()
 
         @BeforeAll
         @JvmStatic
         fun globalSetup() {
             require(container.isRunning()) { container.logs }
-            client = MongoClient.create(container.replicaSetUrl)
+            client = MongoClient.create(container.connectionString)
 
             runBlocking {
                 MongoDbDocumentStore(client, DATABASE, COLLECTION).createCollection()

@@ -303,11 +303,11 @@ store.transaction(retryPolicy) {
 `MongoDbDocumentStore` implements the same `DocumentStore` interface as `DynamoDbDocumentStore`, so it can be used with `EntityStore` in the same way.
 
 ```kotlin
-val client: MongoClient = MongoClient.create("mongodb://localhost:27017/?replicaSet=rs0")
+val client: MongoClient = MongoClient.create("mongodb://localhost:27017")
 
 val documentStore = MongoDbDocumentStore(client, "database", "collection")
 
-// Create the collection, clustered by document key, and the TTL index for deleted documents
+// Create the collection, clustered by document key, the TTL index for deleted documents, and shard the collection
 documentStore.createCollection()
 
 val entityStore = EntityStore(documentStore, DefaultJsonSerializer)
@@ -317,10 +317,10 @@ Updating a single document works with any deployment. Updating multiple document
 
 `createCollection` creates a [clustered collection](https://www.mongodb.com/docs/manual/core/clustered-collections/), which stores documents ordered by `_id`, so that the documents of a partition are stored together and sorted by local key. An existing collection cannot be converted to a clustered collection.
 
-On a sharded cluster, the collection should be sharded using the partition key as the shard key:
+By default, `createCollection` also shards the collection, which requires a sharded cluster, using the hashed partition key followed by the local key as the shard key. Pass `sharded = false` to skip this on a replica set. Sharding the collection is equivalent to:
 
 ```javascript
-sh.shardCollection("database.collection", { "_id.pk": 1 })
+sh.shardCollection("database.collection", { "_id.pk": "hashed", "_id.lk": 1 })
 ```
 
 Read concern and read preference are configured on the `MongoClient`.
