@@ -4,6 +4,7 @@ import io.r2dbc.spi.Connection
 import io.r2dbc.spi.ConnectionFactories
 import io.r2dbc.spi.ConnectionFactory
 import io.r2dbc.spi.R2dbcException
+import io.r2dbc.spi.Statement
 import java.util.UUID
 import java.util.concurrent.TimeUnit
 import java.util.stream.Stream
@@ -11,7 +12,9 @@ import kotlinx.coroutines.Deferred
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.async
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.toList
+import kotlinx.coroutines.reactive.asFlow
 import kotlinx.coroutines.reactive.awaitFirstOrNull
 import kotlinx.coroutines.reactive.awaitSingle
 import kotlinx.coroutines.runBlocking
@@ -44,6 +47,8 @@ private const val JSON_4 = """ {"stu":"vwx"} """
 private const val JSON_5 = """ {"yza":"bcd"} """
 private const val JSON_6 = """ {"efg":"hij"} """
 private const val JSON_NULL_CHARACTER = """ {"key":"\u0000"} """
+private const val PARTITION_FILTER = """$PARTITION_HASH = yb_hash_code($1::text COLLATE "C") AND $PARTITION_KEY = $1"""
+private const val CHECK_VIOLATION = "23514"
 
 // A test waiting for a lock would otherwise never complete
 @Timeout(120, unit = TimeUnit.SECONDS)
@@ -495,6 +500,21 @@ class YugabyteDbDocumentStoreTests {
         assertDocument(document2, ids[1], null, 0)
     }
 
+    @Test
+    fun updateDocuments_wrongHashRejected() = runBlocking {
+        // A document stored under the wrong hash would not be found by the store
+        val exception = assertThrows<R2dbcException> {
+            execute(
+                "INSERT INTO $TABLE ($PARTITION_HASH, $PARTITION_KEY, $LOCAL_KEY, $VERSION, $BODY) " +
+                    "VALUES (yb_hash_code($1::text) + 1, $1, $2, 1, NULL)",
+                ids[0].partitionKey,
+                ids[0].localKey,
+            )
+        }
+
+        assertEquals(CHECK_VIOLATION, exception.sqlState)
+    }
+
     /**
      * Executes [block] while a concurrent transaction writing [document] is in progress: the document is locked by the
      * concurrent transaction before [block] is executed, and the concurrent transaction is committed or rolled back
@@ -507,9 +527,9 @@ class YugabyteDbDocumentStoreTests {
             connection.beginTransaction().awaitFirstOrNull()
             connection
                 .createStatement(
-                    "INSERT INTO $TABLE ($PARTITION_KEY, $LOCAL_KEY, $VERSION, $BODY) " +
-                        "VALUES ($1, $2, $3, CAST($4 AS jsonb)) " +
-                        "ON CONFLICT ($PARTITION_KEY, $LOCAL_KEY) " +
+                    "INSERT INTO $TABLE ($PARTITION_HASH, $PARTITION_KEY, $LOCAL_KEY, $VERSION, $BODY) " +
+                        "VALUES (yb_hash_code($1::text), $1, $2, $3, CAST($4 AS jsonb)) " +
+                        "ON CONFLICT ($PARTITION_HASH, $PARTITION_KEY, $LOCAL_KEY) " +
                         "DO UPDATE SET $VERSION = EXCLUDED.$VERSION, $BODY = EXCLUDED.$BODY"
                 )
                 .bind(0, document.id.partitionKey)
@@ -656,7 +676,7 @@ class YugabyteDbDocumentStoreTests {
         store.updateDocuments(*documents.toTypedArray())
 
         val result = store.query(
-            "$PARTITION_KEY = $1 AND ($BODY->>'a')::int > $2 ORDER BY $LOCAL_KEY",
+            "$PARTITION_FILTER AND ($BODY->>'a')::int > $2 ORDER BY $LOCAL_KEY",
             partitionKey,
             4,
         )
@@ -693,7 +713,7 @@ class YugabyteDbDocumentStoreTests {
         documents.chunked(100).forEach { chunk -> store.updateDocuments(*chunk.toTypedArray()) }
 
         val result = store.query(
-            "$PARTITION_KEY = $1 AND $LOCAL_KEY >= $2 AND $LOCAL_KEY <= $3 ORDER BY $LOCAL_KEY",
+            "$PARTITION_FILTER AND $LOCAL_KEY >= $2 AND $LOCAL_KEY <= $3 ORDER BY $LOCAL_KEY",
             partitionKey,
             "ABC0120",
             "ABC0380",
@@ -709,19 +729,40 @@ class YugabyteDbDocumentStoreTests {
     //region createTable
 
     @Test
-    fun createTable_splitAt() = runBlocking {
-        val splitStore = YugabyteDbDocumentStore(connectionFactory, "public.tests_split")
-        val splitIds: List<DocumentKey> = listOf("a", "g", "it's", "z").map { DocumentKey(it, partitionKey) }
+    fun createTable_tablets() = runBlocking {
+        val tabletsStore = YugabyteDbDocumentStore(connectionFactory, "public.tests_tablets")
+        val tabletsIds: List<DocumentKey> = (0..99).map { i -> DocumentKey("${partitionKey}_$i", "0000") }
 
-        splitStore.createTable(splitAt = listOf("g", "it's"))
+        tabletsStore.createTable(tablets = 4)
         // The table already exists
-        splitStore.createTable()
-        splitStore.updateDocuments(*splitIds.map { parseDocument(it, JSON_1, 0) }.toTypedArray())
+        tabletsStore.createTable()
+        tabletsStore.updateDocuments(*tabletsIds.map { parseDocument(it, JSON_1, 0) }.toTypedArray())
 
-        val documents: List<Document> = splitStore.getDocuments(splitIds).toList()
+        val documents: List<Document> = tabletsStore.getDocuments(tabletsIds).toList()
+        val tablets: List<String> = execute("SELECT num_tablets FROM yb_table_properties('tests_tablets'::regclass)")
+        // The number of documents in each quarter of the hashes
+        val distribution: List<String> = execute(
+            "SELECT count(*) FROM tests_tablets WHERE $PARTITION_KEY LIKE $1 " +
+                "GROUP BY $PARTITION_HASH / 16384 ORDER BY $PARTITION_HASH / 16384",
+            "$partitionKey%",
+        )
 
-        assertEquals(4, documents.size)
-        repeat(4) { i -> assertDocument(documents[i], splitIds[i], JSON_1, 1) }
+        assertEquals(100, documents.size)
+        repeat(100) { i -> assertDocument(documents[i], tabletsIds[i], JSON_1, 1) }
+        assertEquals(listOf("4"), tablets)
+        // Partition keys that only differ by an increasing number are spread across all the tablets
+        assertEquals(4, distribution.size)
+        assertTrue(distribution.all { it.toInt() >= 10 }, distribution.toString())
+    }
+
+    @ParameterizedTest
+    @ValueSource(ints = [-1, 0, 65537])
+    fun createTable_invalidTablets(tablets: Int) = runBlocking {
+        assertThrows<IllegalArgumentException> {
+            store.createTable(tablets)
+        }
+
+        Unit
     }
 
     //endregion
@@ -794,6 +835,25 @@ class YugabyteDbDocumentStoreTests {
             updatedDocuments = emptyList(),
             checkedDocuments = listOf(parseDocument(ids[0], """ {"ignored":"ignored"} """, version)),
         )
+
+    /**
+     * Executes a SQL statement and returns the first column of the result.
+     */
+    private suspend fun execute(sql: String, vararg values: Any): List<String> {
+        val connection: Connection = connectionFactory.create().awaitSingle()
+
+        try {
+            val statement: Statement = connection.createStatement(sql)
+            values.forEachIndexed { index, value -> statement.bind(index, value) }
+
+            return statement.execute().asFlow()
+                .map { result -> result.map { row, _ -> row.get(0, String::class.java).orEmpty() }.asFlow().toList() }
+                .toList()
+                .flatten()
+        } finally {
+            connection.close().awaitFirstOrNull()
+        }
+    }
 
     private fun assertDocuments(actual: List<Document>, expected: List<Document>) {
         assertEquals(expected.size, actual.size)

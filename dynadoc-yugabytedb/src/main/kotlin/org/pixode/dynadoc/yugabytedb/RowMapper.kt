@@ -7,6 +7,7 @@ import kotlinx.serialization.json.JsonObject
 import org.pixode.dynadoc.core.Document
 import org.pixode.dynadoc.core.DocumentKey
 
+const val PARTITION_HASH = "partition_hash"
 const val PARTITION_KEY = "partition_key"
 const val LOCAL_KEY = "local_key"
 const val VERSION = "version"

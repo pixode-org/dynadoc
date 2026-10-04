@@ -42,17 +42,22 @@ With YugabyteDB, each document is stored as a row of a YSQL table with the follo
 
 ```sql
 CREATE TABLE documents (
+    partition_hash INT NOT NULL,
     partition_key TEXT COLLATE "C" NOT NULL,
     local_key TEXT COLLATE "C" NOT NULL,
     version BIGINT NOT NULL,
     body JSONB,
-    PRIMARY KEY (partition_key ASC, local_key ASC)
+    PRIMARY KEY (partition_hash ASC, partition_key ASC, local_key ASC),
+    CHECK (partition_hash = yb_hash_code(partition_key))
 );
 ```
 
-- `partition_key` and `local_key` hold the partition key and the local key. The primary key is range-sharded on both columns, so the documents of a partition are stored together and sorted by local key, and a large partition can be split across several tablets. The `C` collation sorts keys by their UTF-8 encoding, regardless of the locale of the database.
+- `partition_hash` holds the hash of the partition key, between 0 and 65535, as computed by the `yb_hash_code` function of YugabyteDB. It is set by the database when a document is written, and checked by a constraint.
+- `partition_key` and `local_key` hold the partition key and the local key. The `C` collation sorts keys by their UTF-8 encoding, regardless of the locale of the database.
 - `version` is an integer representing the version of the document, for optimistic concurrency management purposes.
 - `body` holds the JSON document. Since the body has its own column, there are no reserved field names.
+
+The primary key is range-sharded, starting with the hash of the partition key. Partitions are therefore spread evenly across the tablets, even when partition keys are increasing values such as timestamps or sequence numbers. The documents of a partition are stored together and sorted by local key, and since tablets are split on the whole primary key rather than on the hash only, a large partition can be split across several tablets.
 
 Deleted documents are kept with a `NULL` body so that their version is preserved. YSQL doesn't support TTLs, so they are never removed automatically.
 
@@ -380,7 +385,7 @@ val connectionFactory: ConnectionFactory =
 
 val documentStore = YugabyteDbDocumentStore(connectionFactory, "documents")
 
-// Create the table, range-sharded by partition key then local key
+// Create the table, range-sharded by hash of the partition key, partition key then local key
 documentStore.createTable()
 
 val entityStore = EntityStore(documentStore, DefaultJsonSerializer)
@@ -392,13 +397,13 @@ The table name can be qualified with a schema, as in `"schema.documents"`.
 
 ### Tablets
 
-A range-sharded table starts with a single tablet, which YugabyteDB splits automatically as the table grows. When the distribution of the partition keys is known, the table can be split from the start by passing the partition keys at which to split it:
+A range-sharded table starts with a single tablet. Since the hashes of the partition keys are evenly distributed, the table can be split from the start into tablets holding an equal share of the hashes:
 
 ```kotlin
-documentStore.createTable(splitAt = listOf("g", "n", "t"))
+documentStore.createTable(tablets = 8)
 ```
 
-Since documents are stored in key order, partition keys that keep increasing, such as timestamps or sequence numbers, send all the new documents to the last tablet. Partition keys should be spread across the key space, for example by using random identifiers.
+YugabyteDB then splits the tablets automatically as they grow. A tablet can be split in the middle of a partition, so the documents of a large partition can be spread across several nodes.
 
 ### Concurrency
 
@@ -422,12 +427,18 @@ Custom queries can be performed using the `query` method, which takes the condit
 
 ```kotlin
 val result = documentStore.query(
-    "partition_key = $1 AND (body->>'price')::numeric BETWEEN $2 AND $3 ORDER BY local_key",
+    """
+    partition_hash = yb_hash_code($1::text COLLATE "C") AND partition_key = $1
+    AND (body->>'price')::numeric BETWEEN $2 AND $3
+    ORDER BY local_key
+    """,
     "products",
     100,
     250,
 )
 ```
+
+To read a partition directly, the condition must specify both the hash of the partition key and the partition key, as above. A condition on `partition_key` alone, or on a range of partition keys, reads the whole table, since partitions are stored in the order of their hashes.
 
 Both methods include deleted documents, which have a `NULL` body. They can be excluded from a query by adding `body IS NOT NULL` to the condition.
 

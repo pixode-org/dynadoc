@@ -29,6 +29,8 @@ private const val SERIALIZATION_FAILURE = "40001"
 private const val DEADLOCK_DETECTED = "40P01"
 private const val UNIQUE_VIOLATION = "23505"
 
+private const val HASH_COUNT = 65536
+
 private val conflictStates: Set<String> =
     setOf(LOCK_NOT_AVAILABLE, SERIALIZATION_FAILURE, DEADLOCK_DETECTED, UNIQUE_VIOLATION)
 
@@ -36,9 +38,11 @@ private val conflictStates: Set<String> =
  * Represents an implementation of the [DocumentStore] interface that relies on the YSQL API of YugabyteDB for
  * persistence.
  *
- * Documents are stored in a range-sharded table whose primary key is made of the partition key and the local key, with
- * a `version` column and a JSONB `body` column (see [createTable]). Deleted documents are kept with a null body so that
- * their version is preserved.
+ * Documents are stored in a range-sharded table whose primary key is made of a hash of the partition key, the
+ * partition key and the local key, with a `version` column and a JSONB `body` column (see [createTable]). The hash
+ * spreads the partitions evenly across the tablets, while the documents of a partition are stored together, sorted by
+ * local key, and can be split across several tablets. Deleted documents are kept with a null body so that their
+ * version is preserved.
  *
  * Updating multiple documents atomically relies on a Read Committed transaction, in which the rows of the documents
  * are locked without waiting before being checked and written. An update fails without waiting if any of its
@@ -51,21 +55,23 @@ class YugabyteDbDocumentStore(
 
     private val rowMapper: RowMapper = RowMapper()
     private val table: String = tableName.split('.').joinToString(".", transform = ::quoteIdentifier)
-    private val keyFilter: String = "$PARTITION_KEY = $1 AND $LOCAL_KEY = $2"
+    private val partitionFilter: String = "$PARTITION_HASH = ${hash("$1")} AND $PARTITION_KEY = $1"
+    private val keyFilter: String = "$partitionFilter AND $LOCAL_KEY = $2"
 
     private val selectSql: String = "SELECT $PARTITION_KEY, $LOCAL_KEY, $VERSION, $BODY::text AS $BODY FROM $table"
     private val lockSql: String = "SELECT $PARTITION_KEY, $LOCAL_KEY, $VERSION FROM $table"
     private val insertSql: String =
-        "INSERT INTO $table ($PARTITION_KEY, $LOCAL_KEY, $VERSION, $BODY) " +
-            "VALUES ($1, $2, $3, CAST($4 AS jsonb)) ON CONFLICT DO NOTHING"
+        "INSERT INTO $table ($PARTITION_HASH, $PARTITION_KEY, $LOCAL_KEY, $VERSION, $BODY) " +
+            "VALUES (${hash("$1")}, $1, $2, $3, CAST($4 AS jsonb)) ON CONFLICT DO NOTHING"
     private val updateSql: String =
         "UPDATE $table SET $VERSION = $3, $BODY = CAST($4 AS jsonb) WHERE $keyFilter AND $VERSION = $5"
     private val deleteSql: String = "DELETE FROM $table WHERE $keyFilter AND $VERSION = $3"
 
     // Locking the row in a subquery lets a single statement fail instead of waiting when the row is locked
     private val updateNoWaitSql: String =
-        "$updateSql AND ($PARTITION_KEY, $LOCAL_KEY) IN (" +
-            "SELECT $PARTITION_KEY, $LOCAL_KEY FROM $table WHERE $keyFilter AND $VERSION = $5 FOR UPDATE NOWAIT)"
+        "$updateSql AND ($PARTITION_HASH, $PARTITION_KEY, $LOCAL_KEY) IN (" +
+            "SELECT $PARTITION_HASH, $PARTITION_KEY, $LOCAL_KEY FROM $table " +
+            "WHERE $keyFilter AND $VERSION = $5 FOR UPDATE NOWAIT)"
 
     //region updateDocuments
 
@@ -260,7 +266,7 @@ class YugabyteDbDocumentStore(
     fun scan(partitionKey: String, startLocalKey: String = "", endLocalKey: String? = null): Flow<Document> {
         val range: String = if (endLocalKey == null) "" else " AND $LOCAL_KEY < $3"
 
-        return select("$PARTITION_KEY = $1 AND $LOCAL_KEY >= $2$range ORDER BY $LOCAL_KEY") {
+        return select("$partitionFilter AND $LOCAL_KEY >= $2$range ORDER BY $LOCAL_KEY") {
             bind(0, partitionKey).bind(1, startLocalKey)
 
             if (endLocalKey != null) {
@@ -271,8 +277,11 @@ class YugabyteDbDocumentStore(
 
     /**
      * Finds the documents matching the given condition, which is a SQL expression following the `WHERE` keyword and
-     * referring to the columns `partition_key`, `local_key`, `version` and `body`. The values of the parameters `$1`,
-     * `$2`, etc. are given by [values], in that order.
+     * referring to the columns `partition_hash`, `partition_key`, `local_key`, `version` and `body`. The values of the
+     * parameters `$1`, `$2`, etc. are given by [values], in that order.
+     *
+     * The documents of a partition are read directly when the condition specifies both the hash of the partition key
+     * and the partition key, as in `partition_hash = yb_hash_code($1::text COLLATE "C") AND partition_key = $1`.
      */
     fun query(where: String, vararg values: Any, configure: Statement.() -> Unit = { }): Flow<Document> =
         select(where) {
@@ -291,18 +300,23 @@ class YugabyteDbDocumentStore(
     }
 
     /**
-     * Creates the table, range-sharded by partition key then local key, so that the documents of a partition are
-     * stored together and sorted by local key.
+     * Creates the table, range-sharded by hash of the partition key, then partition key, then local key, so that the
+     * partitions are spread evenly across the tablets, and the documents of a partition are stored together and
+     * sorted by local key.
      *
-     * The table starts with a single tablet, unless [splitAt] specifies the partition keys at which the table is
-     * initially split into multiple tablets.
+     * The table is initially split into the given number of [tablets], each holding an equal share of the hashes.
+     * Tablets are then split automatically as they grow, including within a partition.
      */
-    suspend fun createTable(splitAt: List<String> = emptyList()) {
+    suspend fun createTable(tablets: Int = 1) {
+        require(tablets in 1..HASH_COUNT) {
+            "The number of tablets must be between 1 and $HASH_COUNT"
+        }
+
         val split: String =
-            if (splitAt.isEmpty()) {
+            if (tablets == 1) {
                 ""
             } else {
-                " SPLIT AT VALUES (${splitAt.joinToString { "(${quoteLiteral(it)})" }})"
+                " SPLIT AT VALUES (${(1 until tablets).joinToString { i -> "(${HASH_COUNT * i / tablets})" }})"
             }
 
         withConnection { connection ->
@@ -310,11 +324,13 @@ class YugabyteDbDocumentStore(
                 .createStatement(
                     """
                     CREATE TABLE IF NOT EXISTS $table (
+                        $PARTITION_HASH INT NOT NULL,
                         $PARTITION_KEY TEXT COLLATE "C" NOT NULL,
                         $LOCAL_KEY TEXT COLLATE "C" NOT NULL,
                         $VERSION BIGINT NOT NULL,
                         $BODY JSONB,
-                        PRIMARY KEY ($PARTITION_KEY ASC, $LOCAL_KEY ASC)
+                        PRIMARY KEY ($PARTITION_HASH ASC, $PARTITION_KEY ASC, $LOCAL_KEY ASC),
+                        CHECK ($PARTITION_HASH = yb_hash_code($PARTITION_KEY))
                     )$split
                     """.trimIndent()
                 )
@@ -376,11 +392,15 @@ class YugabyteDbDocumentStore(
         if (count == 1) {
             keyFilter
         } else {
-            val keys: String = (0 until count).joinToString { i -> "($${i * 2 + 1}, $${i * 2 + 2})" }
-            "($PARTITION_KEY, $LOCAL_KEY) IN ($keys)"
+            val keys: String = (0 until count).joinToString { i ->
+                val partitionKey = "$${i * 2 + 1}"
+                "(${hash(partitionKey)}, $partitionKey, $${i * 2 + 2})"
+            }
+            "($PARTITION_HASH, $PARTITION_KEY, $LOCAL_KEY) IN ($keys)"
         }
 
-    private fun quoteIdentifier(identifier: String): String = "\"${identifier.replace("\"", "\"\"")}\""
+    // The hash used by YugabyteDB for hash sharding, which is evenly distributed between 0 and HASH_COUNT - 1
+    private fun hash(partitionKey: String): String = "yb_hash_code($partitionKey::text COLLATE \"C\")"
 
-    private fun quoteLiteral(value: String): String = "'${value.replace("'", "''")}'"
+    private fun quoteIdentifier(identifier: String): String = "\"${identifier.replace("\"", "\"\"")}\""
 }
