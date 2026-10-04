@@ -398,11 +398,7 @@ The table name can be qualified with a schema, as in `"schema.documents"`.
 
 ### Tablets
 
-A range-sharded table starts with a single tablet. Since the hashes of the partition keys are evenly distributed, the table can be split from the start into tablets holding an equal share of the hashes:
-
-```kotlin
-documentStore.createTable(tablets = 8)
-```
+A range-sharded table normally starts with a single tablet. Since the hashes of the partition keys are evenly distributed, `createTable` splits the table from the start into 256 tablets, each holding an equal share of the hashes.
 
 YugabyteDB then splits the tablets automatically as they grow. A tablet can be split in the middle of a partition, so the documents of a large partition can be spread across several nodes.
 

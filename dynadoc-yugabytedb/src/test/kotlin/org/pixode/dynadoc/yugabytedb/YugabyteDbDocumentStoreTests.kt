@@ -751,7 +751,7 @@ class YugabyteDbDocumentStoreTests {
         val tabletsStore = YugabyteDbDocumentStore(connectionFactory, "public.tests_tablets")
         val tabletsIds: List<DocumentKey> = (0..99).map { i -> DocumentKey("${partitionKey}_$i", "0000") }
 
-        tabletsStore.createTable(tablets = 4)
+        tabletsStore.createTable()
         // The table already exists
         tabletsStore.createTable()
         tabletsStore.updateDocuments(*tabletsIds.map { parseDocument(it, JSON_1, 0) }.toTypedArray())
@@ -767,20 +767,10 @@ class YugabyteDbDocumentStoreTests {
 
         assertEquals(100, documents.size)
         repeat(100) { i -> assertDocument(documents[i], tabletsIds[i], JSON_1, 1) }
-        assertEquals(listOf("4"), tablets)
+        assertEquals(listOf("256"), tablets)
         // Partition keys that only differ by an increasing number are spread across all the tablets
         assertEquals(4, distribution.size)
         assertTrue(distribution.all { it.toInt() >= 10 }, distribution.toString())
-    }
-
-    @ParameterizedTest
-    @ValueSource(ints = [-1, 0, 65537])
-    fun createTable_invalidTablets(tablets: Int) = runBlocking {
-        assertThrows<IllegalArgumentException> {
-            store.createTable(tablets)
-        }
-
-        Unit
     }
 
     //endregion
