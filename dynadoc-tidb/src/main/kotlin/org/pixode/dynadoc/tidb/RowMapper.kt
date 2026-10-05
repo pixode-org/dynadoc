@@ -10,6 +10,7 @@ const val PARTITION_KEY = "partition_key"
 const val LOCAL_KEY = "local_key"
 const val VERSION = "version"
 const val BODY = "body"
+const val DELETED = "deleted"
 
 /**
  * Maps documents to the rows of a TiDB table.

@@ -29,6 +29,9 @@ class TiDbTable(table: String) {
      * Creates the table, clustered by hash of the partition key, then partition key, then local key, so that the
      * partitions are spread evenly across the regions, and the documents of a partition are stored together and
      * sorted by local key.
+     *
+     * The `deleted` column holds the time from which a deleted document can be removed, which is done by the TTL jobs
+     * of the database. It is null for the documents that are not deleted, which are never removed.
      */
     fun createTableSql(): String {
         return """
@@ -38,8 +41,9 @@ class TiDbTable(table: String) {
                 $LOCAL_KEY $keyType,
                 $VERSION BIGINT NOT NULL,
                 $BODY JSON,
+                $DELETED TIMESTAMP NULL,
                 PRIMARY KEY ($PARTITION_HASH, $PARTITION_KEY, $LOCAL_KEY) CLUSTERED
-            )
+            ) TTL = $DELETED + INTERVAL 0 DAY
             """.trimIndent()
     }
 
@@ -66,8 +70,9 @@ class TiDbTable(table: String) {
      * Returns the script updating or checking the given number of documents. TiDB doesn't support stored procedures,
      * so the statements of the script are sent together, in a single request.
      *
-     * The parameters of the script are, for each document, the partition key, twice, the local key, the expected
-     * version, the new body, and whether the version of the document is checked without the document being modified.
+     * The parameters of the script are the time, in seconds since the epoch, from which the documents deleted by the
+     * update can be removed, then, for each document, the partition key, twice, the local key, the expected version,
+     * the new body, and whether the version of the document is checked without the document being modified.
      *
      * The last statement of the script returns null when the documents have been updated. When a document doesn't
      * have the expected version, none of the documents is updated, and the index of that document is returned. The
@@ -81,6 +86,8 @@ class TiDbTable(table: String) {
         val rows: List<String> = (0 until count).map { index -> "($index, CRC32(?), ?, ?, ?, ?, ?)" }
 
         return """
+            SET @deleted = FROM_UNIXTIME(?);
+
             -- Read the versions as they are once the rows have been locked
             SET TRANSACTION ISOLATION LEVEL READ COMMITTED;
 
@@ -103,8 +110,9 @@ class TiDbTable(table: String) {
             );
 
             -- Fails if a document has been created by a concurrent transaction
-            INSERT INTO $tableName ($PARTITION_HASH, $PARTITION_KEY, $LOCAL_KEY, $VERSION, $BODY)
-            SELECT o.$PARTITION_HASH, o.$PARTITION_KEY, o.$LOCAL_KEY, 1, o.$BODY FROM $updateTableName o
+            INSERT INTO $tableName ($PARTITION_HASH, $PARTITION_KEY, $LOCAL_KEY, $VERSION, $BODY, $DELETED)
+            SELECT o.$PARTITION_HASH, o.$PARTITION_KEY, o.$LOCAL_KEY, 1, o.$BODY, IF(o.$BODY IS NULL, @deleted, NULL)
+            FROM $updateTableName o
             WHERE o.$VERSION = 0 AND @conflict IS NULL;
 
             -- Missing checked documents were inserted above to conflict with concurrent inserts, remove them
@@ -112,7 +120,7 @@ class TiDbTable(table: String) {
             WHERE o.$IS_CHECK AND o.$VERSION = 0 AND @conflict IS NULL;
 
             UPDATE /*+ INL_JOIN(t) */ $tableName t JOIN $updateTableName o ON $rowFilter
-            SET t.$VERSION = o.$VERSION + 1, t.$BODY = o.$BODY
+            SET t.$VERSION = o.$VERSION + 1, t.$BODY = o.$BODY, t.$DELETED = IF(o.$BODY IS NULL, @deleted, NULL)
             WHERE NOT o.$IS_CHECK AND o.$VERSION > 0 AND @conflict IS NULL;
 
             COMMIT;

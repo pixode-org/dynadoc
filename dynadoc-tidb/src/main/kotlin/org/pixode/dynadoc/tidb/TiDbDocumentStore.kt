@@ -4,6 +4,8 @@ import io.r2dbc.spi.Connection
 import io.r2dbc.spi.ConnectionFactory
 import io.r2dbc.spi.R2dbcException
 import io.r2dbc.spi.Statement
+import java.time.Clock
+import java.time.Duration
 import java.util.Optional
 import kotlin.jvm.optionals.getOrNull
 import kotlinx.coroutines.NonCancellable
@@ -42,7 +44,7 @@ private val conflictCodes: Set<Int> =
  * key and the local key, with a `version` column and a JSON `body` column (see [createTable]). The hash spreads the
  * partitions evenly across the regions, while the documents of a partition are stored together, sorted by local key,
  * and can be split across several regions. Deleted documents are kept with a null body so that their version is
- * preserved.
+ * preserved, until they are removed by the TTL jobs of the database, once [expiration] has elapsed.
  *
  * TiDB doesn't support stored procedures, so documents are updated by a script whose statements are sent together,
  * with the documents as its parameters. An update is therefore a single round trip to the database, and a single
@@ -54,6 +56,8 @@ private val conflictCodes: Set<Int> =
 class TiDbDocumentStore(
     private val connectionFactory: ConnectionFactory,
     private val tableName: String,
+    private val expiration: Duration = Duration.ofDays(30),
+    private val clock: Clock = Clock.systemUTC(),
 ) : DocumentStore {
     private val table = TiDbTable(tableName)
 
@@ -122,6 +126,9 @@ class TiDbDocumentStore(
     private fun Statement.bindDocuments(updated: List<Document>, checked: List<Document>) {
         var index = 0
 
+        // The time from which the documents deleted by the update can be removed
+        bind(index++, (clock.instant() + expiration).epochSecond)
+
         fun bindDocument(document: Document, body: JsonElement?, check: Boolean) {
             bind(index++, document.id.partitionKey)
             bind(index++, document.id.partitionKey)
@@ -131,10 +138,7 @@ class TiDbDocumentStore(
             if (body == null) {
                 bindNull(index++, String::class.java)
             } else {
-                require(body is JsonObject) {
-                    "The document must be a valid JSON object"
-                }
-
+                require(body is JsonObject) { "The document must be a valid JSON object" }
                 bind(index++, body.toString())
             }
 

@@ -47,20 +47,22 @@ CREATE TABLE documents (
     local_key VARCHAR(255) CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_bin NOT NULL,
     version BIGINT NOT NULL,
     body JSON,
+    deleted TIMESTAMP NULL,
     PRIMARY KEY (partition_hash, partition_key, local_key) CLUSTERED
-);
+) TTL = deleted + INTERVAL 0 DAY;
 ```
 
 - `partition_hash` holds the hash of the partition key, as computed by the `CRC32` function of TiDB. It is set by the database when a document is written.
 - `partition_key` and `local_key` hold the partition key and the local key, which are limited to 255 characters. The `utf8mb4_0900_bin` collation sorts keys by their UTF-8 encoding, and doesn't ignore trailing spaces.
 - `version` is an integer representing the version of the document, for optimistic concurrency management purposes.
 - `body` holds the JSON document. Since the body has its own column, there are no reserved field names.
+- `deleted` is set on deleted documents. It holds the time from which the document can be removed, and is used by the [TTL feature](https://docs.pingcap.com/tidb/stable/time-to-live) of TiDB to clear soft-deleted documents from the table.
 
 The primary key is clustered and starts with the hash of the partition key. Partitions are therefore spread evenly across the regions, even when partition keys are increasing values such as timestamps or sequence numbers. The documents of a partition are stored together and sorted by local key.
 
 The `JSON` type of TiDB stores numbers that are not integers as double-precision floating-point numbers, so a number such as `1234567890.0987654321` is read back as `1234567890.0987654`.
 
-Deleted documents are kept with a `NULL` body so that their version is preserved. They are never removed automatically.
+Deleted documents are kept with a `NULL` body so that their version is preserved, until TiDB removes them.
 
 ### YugabyteDB mapping
 
@@ -423,6 +425,16 @@ val entityStore = EntityStore(documentStore, DefaultJsonSerializer)
 The module only depends on the R2DBC SPI, so an R2DBC driver for MySQL, such as `io.asyncer:r2dbc-mysql`, must be added to the project. The driver must send statements using the text protocol and allow several statements in a request, which is the default with `r2dbc-mysql`. Every operation takes a connection from the `ConnectionFactory` and closes it when it completes, so a connection pool such as `r2dbc-pool` should be used.
 
 The table name can be qualified with a database, as in `"database.documents"`. TiDB 7.4 or later is required.
+
+### Deleted documents
+
+A deleted document keeps its row, so that its version is preserved, for a duration set by the `expiration` parameter of `TiDbDocumentStore`, which is 30 days by default:
+
+```kotlin
+val documentStore = TiDbDocumentStore(connectionFactory, "documents", expiration = Duration.ofDays(7))
+```
+
+The row is then removed by the TTL jobs of TiDB, which run every hour by default, so it can remain for some time after it has expired. This interval is an attribute of the table, and can be changed with `ALTER TABLE documents TTL_JOB_INTERVAL = '24h'`. Once the row is removed, the document is read with a version of 0, as if it had never existed.
 
 ### Concurrency
 
