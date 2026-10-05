@@ -11,6 +11,7 @@ import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.emitAll
 import kotlinx.coroutines.flow.emptyFlow
+import kotlinx.coroutines.flow.flatMapConcat
 import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.toList
@@ -18,6 +19,7 @@ import kotlinx.coroutines.reactive.asFlow
 import kotlinx.coroutines.reactive.awaitFirstOrNull
 import kotlinx.coroutines.reactive.awaitSingle
 import kotlinx.coroutines.withContext
+import kotlinx.serialization.json.JsonObject
 import org.pixode.dynadoc.core.Document
 import org.pixode.dynadoc.core.DocumentKey
 import org.pixode.dynadoc.core.DocumentStore
@@ -42,9 +44,11 @@ private val conflictCodes: Set<Int> =
  * preserved.
  *
  * TiDB doesn't support stored procedures, so documents are updated by a script whose statements are sent together,
- * with the documents as a single JSON parameter. An update is therefore a single round trip to the database, and a
- * single transaction. The script locks the rows of the documents without waiting before checking and writing them, so
- * an update fails without waiting if any of its documents is locked by a concurrent update.
+ * with the documents as its parameters. An update is therefore a single round trip to the database, and a single
+ * transaction. The script first inserts the documents into a temporary table (see [createTable]), whose rows are
+ * kept in memory and are private to the transaction. It then locks the rows of the documents without waiting before
+ * checking and writing them, so an update fails without waiting if any of its documents is locked by a concurrent
+ * update.
  */
 class TiDbDocumentStore(
     private val connectionFactory: ConnectionFactory,
@@ -57,7 +61,6 @@ class TiDbDocumentStore(
 
     private val selectSql: String =
         "SELECT $PARTITION_KEY, $LOCAL_KEY, $VERSION, CAST($BODY AS CHAR) AS $BODY FROM ${table.tableName}"
-    private val updateScript: String = table.updateScript()
 
     //region updateDocuments
 
@@ -81,21 +84,17 @@ class TiDbDocumentStore(
             return
         }
 
-        require(documents.size <= MAX_UPDATE_SIZE) {
-            "No more than $MAX_UPDATE_SIZE documents can be updated at once"
-        }
-
-        val operations: String = RowMapper.fromDocuments(updatedList, checkedList)
-
         val conflict: Long? = withConnection { connection ->
             try {
                 // Each statement of the script has its own result, the last one being the result of the script
-                connection.createStatement(updateScript)
-                    .bind(0, operations)
+                connection.createStatement(table.updateScript(updatedList.size, checkedList.size))
+                    .apply { bindDocuments(updatedList, checkedList) }
                     .execute()
                     .asFlow()
                     .map { result ->
-                        result.rows { row -> Optional.ofNullable(row.get(0, Long::class.javaObjectType)) }.toList()
+                        result.map { row, _ -> Optional.ofNullable(row.get(0, Long::class.javaObjectType)) }
+                            .asFlow()
+                            .toList()
                     }
                     .toList()
                     .last()
@@ -121,6 +120,33 @@ class TiDbDocumentStore(
         }
     }
 
+    private fun Statement.bindDocuments(updated: List<Document>, checked: List<Document>) {
+        var index = 0
+
+        fun bindDocument(document: Document) {
+            bind(index++, document.id.partitionKey)
+            bind(index++, document.id.partitionKey)
+            bind(index++, document.id.localKey)
+            bind(index++, document.version)
+        }
+
+        updated.forEach { document ->
+            bindDocument(document)
+
+            if (document.body == null) {
+                bindNull(index++, String::class.java)
+            } else {
+                require(document.body is JsonObject) {
+                    "The document must be a valid JSON object"
+                }
+
+                bind(index++, document.body.toString())
+            }
+        }
+
+        checked.forEach(::bindDocument)
+    }
+
     //endregion
 
     //region getDocuments
@@ -141,7 +167,7 @@ class TiDbDocumentStore(
         val documents: Map<DocumentKey, Document> = withConnection { connection ->
             connection.createStatement(selectKeysSql(distinctIds.size))
                 .bindKeys(distinctIds)
-                .rows(RowMapper::toDocument)
+                .asDocuments()
                 .toList()
                 .associateBy { it.id }
         }
@@ -190,7 +216,7 @@ class TiDbDocumentStore(
         withConnection { connection ->
             val documents: Flow<Document> = connection.createStatement("$selectSql WHERE $where")
                 .apply(configure)
-                .rows(RowMapper::toDocument)
+                .asDocuments()
 
             emitAll(documents)
         }
@@ -204,10 +230,14 @@ class TiDbDocumentStore(
      * Creates the table, clustered by hash of the partition key, then partition key, then local key, so that the
      * partitions are spread evenly across the regions, and the documents of a partition are stored together and
      * sorted by local key.
+     *
+     * The temporary table holding the documents of an update is created along with the table. It has the name of the
+     * table followed by `_update`.
      */
     suspend fun createTable() {
         withConnection { connection ->
             connection.createStatement(table.createTableSql()).rowsUpdated().toList()
+            connection.createStatement(table.createUpdateTableSql()).rowsUpdated().toList()
         }
     }
 
@@ -228,14 +258,11 @@ class TiDbDocumentStore(
     private fun Statement.rowsUpdated(): Flow<Long> =
         execute().asFlow().map { result -> result.rowsUpdated.awaitFirstOrNull() ?: 0L }
 
-    private fun <T : Any> Statement.rows(transform: (Row) -> T): Flow<T> = flow {
+    private fun Statement.asDocuments(): Flow<Document> = flow {
         execute().asFlow().collect { result ->
-            emitAll(result.rows(transform))
+            emitAll(result.map(RowMapper::toDocument).asFlow())
         }
     }
-
-    private fun <T : Any> Result.rows(transform: (Row) -> T): Flow<T> =
-        map { row, _ -> transform(row) }.asFlow()
 
     private fun Statement.bindKeys(ids: List<DocumentKey>): Statement {
         ids.forEachIndexed { index, id ->

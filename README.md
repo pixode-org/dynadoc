@@ -413,7 +413,8 @@ val connectionFactory: ConnectionFactory =
 
 val documentStore = TiDbDocumentStore(connectionFactory, "documents")
 
-// Create the table, clustered by hash of the partition key, partition key then local key
+// Create the table, clustered by hash of the partition key, partition key then local key,
+// and the temporary table used to update its documents
 documentStore.createTable()
 
 val entityStore = EntityStore(documentStore, DefaultJsonSerializer)
@@ -425,9 +426,11 @@ The table name can be qualified with a database, as in `"database.documents"`. T
 
 ### Concurrency
 
-TiDB doesn't support stored procedures, so documents are updated by a script made of several statements, which are sent together to the database, with the documents as a single JSON parameter. An update, whether of a single document or of multiple documents (for example with `EntityStore.transaction`), therefore takes a single round trip to the database and runs as a single pessimistic transaction. An update is limited to 10,000 documents.
+TiDB doesn't support stored procedures, so documents are updated by a script made of several statements, which are sent together to the database, with the documents as its parameters. An update, whether of a single document or of multiple documents (for example with `EntityStore.transaction`), therefore takes a single round trip to the database and runs as a single pessimistic transaction.
 
-The script locks the rows of the documents, checks their versions, then writes the documents. Checked documents are locked without being modified, so that a concurrent write to any of the documents causes an `UpdateConflictException`. When a document doesn't have the expected version, nothing is written.
+The script first inserts the documents into a [global temporary table](https://docs.pingcap.com/tidb/stable/temporary-tables), which `createTable` creates along with the table, under the name of the table followed by `_update`. The definition of that table is shared, but its rows are kept in the memory of TiDB, are only visible to the transaction that inserted them, and are removed when it completes, so concurrent updates don't see each other's documents. The documents of an update are limited to the size set by `tidb_tmp_table_max_size`, which is 64 MB by default.
+
+The script then locks the rows of the documents, checks their versions, and writes the documents. Checked documents are locked without being modified, so that a concurrent write to any of the documents causes an `UpdateConflictException`. When a document doesn't have the expected version, nothing is written.
 
 An update that finds one of its documents locked by another update still in progress fails immediately with an `UpdateConflictException`, rather than waiting for the other update to complete. The script is then interrupted, and its transaction is rolled back with a second request. TiDB doesn't indicate which document is locked, so the exception refers to the first document of the update. Under contention, using a `RetryPolicy` with `transaction` retries the update with fresh versions of the documents.
 

@@ -3,6 +3,7 @@ package org.pixode.dynadoc.tidb
 import io.r2dbc.spi.Readable
 import kotlinx.serialization.json.Json
 import org.junit.jupiter.api.Assertions.assertEquals
+import org.junit.jupiter.api.Assertions.assertNull
 import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.assertThrows
 import org.junit.jupiter.params.ParameterizedTest
@@ -14,55 +15,6 @@ private val id: DocumentKey = DocumentKey("PK", "LK")
 private val otherId: DocumentKey = DocumentKey("PK", "OTHER")
 
 class RowMapperTests {
-    @Test
-    fun fromDocuments_updatedAndChecked() {
-        val operations: String = RowMapper.fromDocuments(
-            updatedDocuments = listOf(
-                parseDocument(id, """ {"a":1.50,"n":1234567890.0987654321} """, 4),
-                parseDocument(otherId, null, 0),
-            ),
-            checkedDocuments = listOf(parseDocument(id, """ {"ignored":"ignored"} """, 2)),
-        )
-
-        assertEquals(
-            Json.parseToJsonElement(
-                """
-                [
-                    {"partition_key":"PK","local_key":"LK","version":4,"body":{"a":1.50,"n":1234567890.0987654321},"check":false},
-                    {"partition_key":"PK","local_key":"OTHER","version":0,"body":null,"check":false},
-                    {"partition_key":"PK","local_key":"LK","version":2,"body":null,"check":true}
-                ]
-                """
-            ),
-            Json.parseToJsonElement(operations),
-        )
-    }
-
-    @Test
-    fun fromDocuments_noDocument() {
-        val operations: String = RowMapper.fromDocuments(emptyList(), emptyList())
-
-        assertEquals("[]", operations)
-    }
-
-    @ParameterizedTest
-    @ValueSource(strings = [""" "a" """, """ 10 """, """ true """, """ null """, """ ["a"] """])
-    fun fromDocuments_invalidBody(body: String) {
-        assertThrows<IllegalArgumentException> {
-            RowMapper.fromDocuments(listOf(parseDocument(id, body, 0)), emptyList())
-        }
-    }
-
-    @Test
-    fun fromDocuments_checkedBodyIgnored() {
-        val operations: String = RowMapper.fromDocuments(emptyList(), listOf(parseDocument(id, """ "a" """, 1)))
-
-        assertEquals(
-            Json.parseToJsonElement(""" [{"partition_key":"PK","local_key":"LK","version":1,"body":null,"check":true}] """),
-            Json.parseToJsonElement(operations),
-        )
-    }
-
     @ParameterizedTest
     @ValueSource(
         strings = [

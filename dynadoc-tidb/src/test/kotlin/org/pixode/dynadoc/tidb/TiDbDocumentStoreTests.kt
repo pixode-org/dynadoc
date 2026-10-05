@@ -520,18 +520,24 @@ class TiDbDocumentStoreTests {
     }
 
     @Test
-    fun updateDocuments_tooManyDocuments() = runBlocking {
-        val documents = (0..MAX_UPDATE_SIZE).map { i ->
-            parseDocument(DocumentKey(partitionKey, "ABC%05d".format(i)), JSON_1, 0)
+    fun updateDocuments_concurrentUpdates() = runBlocking {
+        // The documents of each update are held in the same temporary table
+        val batches: List<List<Document>> = (0..19).map { batch ->
+            (0..9).map { i ->
+                parseDocument(DocumentKey("${partitionKey}_$batch", "ABC0$i"), """ {"batch":$batch,"a":$i} """, 0)
+            }
         }
 
-        assertThrows<IllegalArgumentException> {
-            store.updateDocuments(*documents.toTypedArray())
+        val results: List<Result<Unit>> = batches
+            .map { documents ->
+                async(Dispatchers.Default) { runCatching { store.updateDocuments(*documents.toTypedArray()) } }
+            }
+            .map { it.await() }
+
+        results.forEach { result -> assertEquals(Result.success(Unit), result) }
+        batches.forEachIndexed { batch, documents ->
+            assertDocuments(store.scan("${partitionKey}_$batch").toList(), documents)
         }
-
-        val result: List<Document> = store.scan(partitionKey).toList()
-
-        assertEquals(0, result.size)
     }
 
     @Test
