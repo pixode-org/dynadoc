@@ -438,15 +438,17 @@ The row is then removed by the TTL jobs of TiDB, which run every hour by default
 
 ### Concurrency
 
-TiDB doesn't support stored procedures, so documents are updated by a script made of several statements, which are sent together to the database, with the documents as its parameters. An update, whether of a single document or of multiple documents (for example with `EntityStore.transaction`), therefore takes a single round trip to the database and runs as a single pessimistic transaction.
+An update of a single document is a single `INSERT` or `UPDATE` statement, which only writes the document if it has the expected version.
+
+TiDB doesn't support stored procedures, so an update of multiple documents (for example with `EntityStore.transaction`) is a script made of several statements, which are sent together to the database, with the documents as its parameters. In both cases, an update takes a single round trip to the database and runs as a single transaction.
 
 The script first inserts the documents into a [global temporary table](https://docs.pingcap.com/tidb/stable/temporary-tables), which `createTable` creates along with the table, under the name of the table followed by `_update`. The definition of that table is shared, but its rows are kept in the memory of TiDB, are only visible to the transaction that inserted them, and are removed when it completes, so concurrent updates don't see each other's documents. The documents of an update are limited to the size set by `tidb_tmp_table_max_size`, which is 64 MB by default.
 
-The script then locks the rows of the documents, checks their versions, and writes the documents. Checked documents are locked without being modified, so that a concurrent write to any of the documents causes an `UpdateConflictException`. When a document doesn't have the expected version, nothing is written.
+The script then checks the versions of the documents, and writes them. When a document doesn't have the expected version, nothing is written.
 
-An update that finds one of its documents locked by another update still in progress fails immediately with an `UpdateConflictException`, rather than waiting for the other update to complete. The script is then interrupted, and its transaction is rolled back with a second request. TiDB doesn't indicate which document is locked, so the exception refers to the first document of the update. Under contention, using a `RetryPolicy` with `transaction` retries the update with fresh versions of the documents.
+Updates are optimistic transactions: they don't lock the documents while they run, and conflicts are detected by TiDB when the transaction is committed. If any of the documents of an update, including the checked ones, has been written by another transaction since the update started, the commit fails and an `UpdateConflictException` is thrown. TiDB doesn't indicate which document caused the conflict, so the exception then refers to the first document of the update. Under contention, using a `RetryPolicy` with `transaction` retries the update with fresh versions of the documents.
 
-The only case in which an update waits is when another update in progress is creating the same document, as there is no row to lock yet. It then fails with an `UpdateConflictException` if the other update is committed.
+An update never waits for another update of the store. It can however wait if one of its documents is locked for a long time by a transaction of another application, such as a pessimistic transaction left open.
 
 ### Queries
 

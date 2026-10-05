@@ -46,6 +46,7 @@ private const val JSON_3 = """ {"mno":"pqr"} """
 private const val JSON_4 = """ {"stu":"vwx"} """
 private const val JSON_5 = """ {"yza":"bcd"} """
 private const val JSON_6 = """ {"efg":"hij"} """
+private const val WRITE_CONFLICT = 9007
 private const val PARTITION_FILTER = "$PARTITION_HASH = CRC32(?) AND $PARTITION_KEY = ?"
 
 // A test waiting for a lock would otherwise never complete
@@ -383,121 +384,135 @@ class TiDbDocumentStoreTests {
     }
 
     @ParameterizedTest
-    @ValueSource(booleans = [true, false])
-    fun updateDocuments_multipleDocumentsConcurrentTransaction(checkOnly: Boolean) = runBlocking {
+    @ValueSource(strings = ["single", "multiple", "check"])
+    fun updateDocuments_concurrentTransaction(mode: String) = runBlocking {
         updateDocument(ids[0], JSON_1, 0)
         updateDocument(ids[1], JSON_2, 0)
 
-        // The concurrent transaction only commits after the update returns, so the update fails without waiting for it
-        val exception = withConcurrentTransaction(parseDocument(ids[1], JSON_3, 1), commit = true) {
-            assertThrows<UpdateConflictException> {
-                if (checkOnly) {
-                    store.updateDocuments(
-                        updatedDocuments = listOf(parseDocument(ids[0], JSON_4, 1)),
-                        checkedDocuments = listOf(parseDocument(ids[1], JSON_5, 1)),
-                    )
-                } else {
-                    store.updateDocuments(
-                        parseDocument(ids[0], JSON_4, 1),
-                        parseDocument(ids[1], JSON_5, 1),
-                    )
-                }
-            }
-        }
-
-        val document1 = store.getDocument(ids[0])
-        val document2 = store.getDocument(ids[1])
-
-        assertDocument(document1, ids[0], JSON_1, 1)
-        assertDocument(document2, ids[1], JSON_3, 2)
-        // The database doesn't indicate which document is locked
-        assertEquals(ids[0], exception.id)
-    }
-
-    @ParameterizedTest
-    @ValueSource(booleans = [true, false])
-    fun updateDocuments_multipleDocumentsConcurrentTransactionRollback(checkOnly: Boolean) = runBlocking {
-        updateDocument(ids[0], JSON_1, 0)
-        updateDocument(ids[1], JSON_2, 0)
-
-        val update: suspend () -> Unit = {
-            if (checkOnly) {
-                store.updateDocuments(
-                    updatedDocuments = listOf(parseDocument(ids[0], JSON_4, 1)),
-                    checkedDocuments = listOf(parseDocument(ids[1], JSON_5, 1)),
-                )
-            } else {
-                store.updateDocuments(
+        // The update is committed first, so the concurrent transaction writing the same document can't be committed,
+        // unless the update only checks the document
+        val exception: R2dbcException? = withConcurrentTransaction(parseDocument(ids[1], JSON_3, 1)) {
+            when (mode) {
+                "single" -> store.updateDocuments(parseDocument(ids[1], JSON_5, 1))
+                "multiple" -> store.updateDocuments(
                     parseDocument(ids[0], JSON_4, 1),
                     parseDocument(ids[1], JSON_5, 1),
                 )
+                else -> store.updateDocuments(
+                    updatedDocuments = listOf(parseDocument(ids[0], JSON_4, 1)),
+                    checkedDocuments = listOf(parseDocument(ids[1], JSON_5, 1)),
+                )
             }
         }
-
-        withConcurrentTransaction(parseDocument(ids[1], JSON_3, 1), commit = false) {
-            assertThrows<UpdateConflictException> { update() }
-        }
-
-        // The concurrent transaction has been rolled back, so the same update succeeds
-        update()
 
         val document1 = store.getDocument(ids[0])
         val document2 = store.getDocument(ids[1])
 
-        assertDocument(document1, ids[0], JSON_4, 2)
-        assertDocument(document2, ids[1], if (checkOnly) JSON_2 else JSON_5, if (checkOnly) 1 else 2)
-    }
-
-    @Test
-    fun updateDocuments_lockedDocument() = runBlocking {
-        updateDocument(ids[0], JSON_1, 0)
-
-        // The concurrent transaction only commits after the update returns, so the update fails without waiting for it
-        val exception = withConcurrentTransaction(parseDocument(ids[0], JSON_2, 1), commit = true) {
-            assertThrows<UpdateConflictException> {
-                store.updateDocuments(parseDocument(ids[0], JSON_3, 1))
-            }
-        }
-
-        val document = store.getDocument(ids[0])
-
-        assertEquals(ids[0], exception.id)
-        assertDocument(document, ids[0], JSON_2, 2)
+        assertEquals(if (mode == "check") null else WRITE_CONFLICT, exception?.errorCode)
+        assertDocument(document1, ids[0], if (mode == "single") JSON_1 else JSON_4, if (mode == "single") 1 else 2)
+        assertDocument(document2, ids[1], if (mode == "check") JSON_3 else JSON_5, 2)
     }
 
     @ParameterizedTest
     @ValueSource(strings = ["single", "multiple", "check"])
     fun updateDocuments_concurrentInsert(mode: String) = runBlocking {
-        // There is no row to lock, so the update waits for the concurrent transaction inserting the same document
-        val result: Result<Unit> = withConcurrentTransaction(parseDocument(ids[1], JSON_1, 0), commit = true) {
-            val update: Deferred<Result<Unit>> = async(Dispatchers.Default) {
-                runCatching {
-                    when (mode) {
-                        "single" -> store.updateDocuments(parseDocument(ids[1], JSON_2, 0))
-                        "multiple" -> store.updateDocuments(
-                            parseDocument(ids[0], JSON_2, 0),
-                            parseDocument(ids[1], JSON_3, 0),
-                        )
-                        else -> store.updateDocuments(
-                            updatedDocuments = listOf(parseDocument(ids[0], JSON_2, 0)),
-                            checkedDocuments = listOf(parseDocument(ids[1], JSON_3, 0)),
-                        )
-                    }
-                }
+        // The update is committed first, so the concurrent transaction creating the same document can't be committed,
+        // unless the update only checks the document
+        val exception: R2dbcException? = withConcurrentTransaction(parseDocument(ids[1], JSON_1, 0)) {
+            when (mode) {
+                "single" -> store.updateDocuments(parseDocument(ids[1], JSON_3, 0))
+                "multiple" -> store.updateDocuments(
+                    parseDocument(ids[0], JSON_2, 0),
+                    parseDocument(ids[1], JSON_3, 0),
+                )
+                else -> store.updateDocuments(
+                    updatedDocuments = listOf(parseDocument(ids[0], JSON_2, 0)),
+                    checkedDocuments = listOf(parseDocument(ids[1], JSON_3, 0)),
+                )
             }
-
-            delay(2000)
-            assertTrue(update.isActive)
-
-            update
-        }.await()
+        }
 
         val document1 = store.getDocument(ids[0])
         val document2 = store.getDocument(ids[1])
 
-        assertInstanceOf(UpdateConflictException::class.java, result.exceptionOrNull())
-        assertDocument(document1, ids[0], null, 0)
-        assertDocument(document2, ids[1], JSON_1, 1)
+        assertEquals(if (mode == "check") null else WRITE_CONFLICT, exception?.errorCode)
+        assertDocument(document1, ids[0], if (mode == "single") null else JSON_2, if (mode == "single") 0 else 1)
+        assertDocument(document2, ids[1], if (mode == "check") JSON_1 else JSON_3, 1)
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = ["single", "multiple", "check", "insert"])
+    fun updateDocuments_concurrentConflict(mode: String) = runBlocking {
+        if (mode != "insert") {
+            updateDocument(ids[0], JSON_1, 0)
+        }
+
+        // Only one of the updates of the same version of a document succeeds
+        val results: List<Result<Unit>> = (1..10)
+            .map { i ->
+                async(Dispatchers.Default) {
+                    runCatching {
+                        when (mode) {
+                            "single" -> store.updateDocuments(parseDocument(ids[0], """ {"a":$i} """, 1))
+                            "insert" -> store.updateDocuments(parseDocument(ids[0], """ {"a":$i} """, 0))
+                            "multiple" -> store.updateDocuments(
+                                parseDocument(ids[0], """ {"a":$i} """, 1),
+                                parseDocument(ids[i], JSON_2, 0),
+                            )
+                            else -> store.updateDocuments(
+                                updatedDocuments = listOf(parseDocument(ids[0], """ {"a":$i} """, 1)),
+                                checkedDocuments = listOf(parseDocument(ids[i], JSON_2, 0)),
+                            )
+                        }
+                    }
+                }
+            }
+            .map { it.await() }
+
+        val succeeded: List<Int> = results.indices.filter { results[it].isSuccess }
+        val document = store.getDocument(ids[0])
+
+        assertEquals(1, succeeded.size, results.toString())
+        results.filter { it.isFailure }.forEach { result ->
+            assertInstanceOf(UpdateConflictException::class.java, result.exceptionOrNull())
+        }
+        assertDocument(document, ids[0], """ {"a":${succeeded[0] + 1}} """, if (mode == "insert") 1 else 2)
+    }
+
+    @ParameterizedTest
+    @ValueSource(booleans = [true, false])
+    fun updateDocuments_concurrentChecks(existing: Boolean) = runBlocking {
+        val version: Long = if (existing) 1 else 0
+
+        repeat(30) { round ->
+            val id1 = DocumentKey("${partitionKey}_$round", "A")
+            val id2 = DocumentKey("${partitionKey}_$round", "B")
+            if (existing) {
+                store.updateDocuments(parseDocument(id1, JSON_1, 0), parseDocument(id2, JSON_1, 0))
+            }
+
+            // Each update writes the document checked by the other one, so they can't both succeed
+            val results: List<Result<Unit>> = listOf(id1 to id2, id2 to id1)
+                .map { (updated, checked) ->
+                    async(Dispatchers.Default) {
+                        runCatching {
+                            store.updateDocuments(
+                                updatedDocuments = listOf(parseDocument(updated, JSON_2, version)),
+                                checkedDocuments = listOf(parseDocument(checked, JSON_3, version)),
+                            )
+                        }
+                    }
+                }
+                .map { it.await() }
+
+            val documents: List<Document> = store.getDocuments(listOf(id1, id2)).toList()
+
+            assertTrue(results.count { it.isSuccess } <= 1, "Round $round: $results")
+            results.filter { it.isFailure }.forEach { result ->
+                assertInstanceOf(UpdateConflictException::class.java, result.exceptionOrNull())
+            }
+            assertEquals(results.count { it.isSuccess }, documents.count { it.version == version + 1 })
+        }
     }
 
     @Test
@@ -566,15 +581,14 @@ class TiDbDocumentStoreTests {
     }
 
     /**
-     * Executes [block] while a concurrent transaction writing [document] is in progress: the document is locked by the
-     * concurrent transaction before [block] is executed, and the concurrent transaction is committed or rolled back
-     * after [block] completes successfully.
+     * Executes [block] while a concurrent optimistic transaction writing [document] is in progress, then commits the
+     * concurrent transaction, and returns the error raised by the commit, if any.
      */
-    private suspend fun <T> withConcurrentTransaction(document: Document, commit: Boolean, block: suspend () -> T): T {
+    private suspend fun withConcurrentTransaction(document: Document, block: suspend () -> Unit): R2dbcException? {
         val connection: Connection = connectionFactory.create().awaitSingle()
 
         try {
-            connection.beginTransaction().awaitFirstOrNull()
+            connection.createStatement("BEGIN OPTIMISTIC").execute().awaitSingle().rowsUpdated.awaitFirstOrNull()
             connection
                 .createStatement(
                     "INSERT INTO $TABLE ($PARTITION_HASH, $PARTITION_KEY, $LOCAL_KEY, $VERSION, $BODY) " +
@@ -591,15 +605,14 @@ class TiDbDocumentStoreTests {
                 .rowsUpdated
                 .awaitFirstOrNull()
 
-            val result: T = block()
+            block()
 
-            if (commit) {
-                connection.commitTransaction().awaitFirstOrNull()
-            } else {
-                connection.rollbackTransaction().awaitFirstOrNull()
+            return try {
+                connection.createStatement("COMMIT").execute().awaitSingle().rowsUpdated.awaitFirstOrNull()
+                null
+            } catch (exception: R2dbcException) {
+                exception
             }
-
-            return result
         } finally {
             connection.close().awaitFirstOrNull()
         }

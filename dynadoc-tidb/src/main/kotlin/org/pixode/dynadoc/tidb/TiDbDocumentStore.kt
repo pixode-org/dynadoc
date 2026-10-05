@@ -31,11 +31,10 @@ import org.pixode.dynadoc.core.UpdateConflictException
 private const val DUPLICATE_ENTRY = 1062
 private const val LOCK_WAIT_TIMEOUT = 1205
 private const val DEADLOCK = 1213
-private const val LOCK_NOT_AVAILABLE = 3572
 private const val WRITE_CONFLICT = 9007
 
 private val conflictCodes: Set<Int> =
-    setOf(DUPLICATE_ENTRY, LOCK_WAIT_TIMEOUT, DEADLOCK, LOCK_NOT_AVAILABLE, WRITE_CONFLICT)
+    setOf(DUPLICATE_ENTRY, LOCK_WAIT_TIMEOUT, DEADLOCK, WRITE_CONFLICT)
 
 /**
  * Represents an implementation of the [DocumentStore] interface that relies on TiDB for persistence.
@@ -46,12 +45,14 @@ private val conflictCodes: Set<Int> =
  * and can be split across several regions. Deleted documents are kept with a null body so that their version is
  * preserved, until they are removed by the TTL jobs of the database, once [expiration] has elapsed.
  *
- * TiDB doesn't support stored procedures, so documents are updated by a script whose statements are sent together,
- * with the documents as its parameters. An update is therefore a single round trip to the database, and a single
- * transaction. The script first inserts the documents into a temporary table (see [createTable]), whose rows are
- * kept in memory and are private to the transaction. It then locks the rows of the documents without waiting before
- * checking and writing them, so an update fails without waiting if any of its documents is locked by a concurrent
- * update.
+ * A single document is updated by a single statement. TiDB doesn't support stored procedures, so multiple documents
+ * are updated by a script whose statements are sent together, with the documents as its parameters. An update is
+ * therefore a single round trip to the database, and a single transaction. The script first inserts the documents
+ * into a temporary table (see [createTable]), whose rows are kept in memory and are private to the transaction. It
+ * then checks and writes the documents.
+ *
+ * Updates are optimistic transactions, which don't lock the documents: an update fails when it is committed if any
+ * of its documents has been written by a concurrent transaction.
  */
 class TiDbDocumentStore(
     private val connectionFactory: ConnectionFactory,
@@ -85,9 +86,58 @@ class TiDbDocumentStore(
         }
 
         val documents: List<Document> = updatedList + checkedList
-        if (documents.isEmpty()) {
-            return
+
+        when {
+            documents.isEmpty() -> {}
+            updatedList.size == 1 && checkedList.isEmpty() -> updateSingleDocument(updatedList[0])
+            else -> updateMultipleDocuments(updatedList, checkedList)
         }
+    }
+
+    private suspend fun updateSingleDocument(document: Document) {
+        val body: String? = fromBody(document.body)
+        // The time from which the document can be removed if it is deleted
+        val deleted: Long? = if (body == null) expirationTime() else null
+
+        val rowsUpdated: Long =
+            try {
+                withConnection { connection ->
+                    val statement: Statement =
+                        if (document.version == 0L) {
+                            connection.createStatement(table.insertSql())
+                                .bind(0, document.id.partitionKey)
+                                .bind(1, document.id.partitionKey)
+                                .bind(2, document.id.localKey)
+                                .bindNullable(3, body, String::class.java)
+                                .bindNullable(4, deleted, Long::class.javaObjectType)
+                        } else {
+                            connection.createStatement(table.updateSql())
+                                .bindNullable(0, body, String::class.java)
+                                .bindNullable(1, deleted, Long::class.javaObjectType)
+                                .bind(2, document.id.partitionKey)
+                                .bind(3, document.id.partitionKey)
+                                .bind(4, document.id.localKey)
+                                .bind(5, document.version)
+                        }
+
+                    statement.rowsUpdated().toList().sum()
+                }
+            } catch (exception: R2dbcException) {
+                // The document has been created or written by a concurrent transaction
+                if (exception.errorCode in conflictCodes) {
+                    throw UpdateConflictException(document.id)
+                } else {
+                    throw exception
+                }
+            }
+
+        if (rowsUpdated == 0L) {
+            throw UpdateConflictException(document.id)
+        }
+    }
+
+    private suspend fun updateMultipleDocuments(updatedList: List<Document>, checkedList: List<Document>) {
+        val documents: List<Document> = updatedList + checkedList
 
         val conflict: Long? = withConnection { connection ->
             try {
@@ -104,7 +154,7 @@ class TiDbDocumentStore(
                     .last()
                     ?.getOrNull()
             } catch (exception: Throwable) {
-                // The script stops at the statement that failed, leaving its transaction open
+                // The script stops at the statement that failed, which can leave its transaction open
                 withContext(NonCancellable) {
                     connection.createStatement("ROLLBACK").rowsUpdated().toList()
                 }
@@ -127,27 +177,31 @@ class TiDbDocumentStore(
         var index = 0
 
         // The time from which the documents deleted by the update can be removed
-        bind(index++, (clock.instant() + expiration).epochSecond)
+        bind(index++, expirationTime())
 
         fun bindDocument(document: Document, body: JsonElement?, check: Boolean) {
             bind(index++, document.id.partitionKey)
             bind(index++, document.id.partitionKey)
             bind(index++, document.id.localKey)
             bind(index++, document.version)
-
-            if (body == null) {
-                bindNull(index++, String::class.java)
-            } else {
-                require(body is JsonObject) { "The document must be a valid JSON object" }
-                bind(index++, body.toString())
-            }
-
+            bindNullable(index++, fromBody(body), String::class.java)
             bind(index++, check)
         }
 
         updated.forEach { document -> bindDocument(document, document.body, false) }
         checked.forEach { document -> bindDocument(document, null, true) }
     }
+
+    private fun fromBody(body: JsonElement?): String? {
+        require(body == null || body is JsonObject) { "The document must be a valid JSON object" }
+
+        return body?.toString()
+    }
+
+    private fun expirationTime(): Long = (clock.instant() + expiration).epochSecond
+
+    private fun <T : Any> Statement.bindNullable(index: Int, value: T?, type: Class<T>): Statement =
+        if (value == null) bindNull(index, type) else bind(index, value)
 
     //endregion
 

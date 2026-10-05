@@ -67,6 +67,24 @@ class TiDbTable(table: String) {
     }
 
     /**
+     * Returns the statement creating a document, which fails if the document already exists. Its parameters are the
+     * partition key, twice, the local key, the body, and the time, in seconds since the epoch, from which the
+     * document can be removed if it is deleted.
+     */
+    fun insertSql(): String =
+        "INSERT INTO $tableName ($PARTITION_HASH, $PARTITION_KEY, $LOCAL_KEY, $VERSION, $BODY, $DELETED) " +
+            "VALUES (CRC32(?), ?, ?, 1, ?, FROM_UNIXTIME(?))"
+
+    /**
+     * Returns the statement updating a document, which doesn't update any row if the document doesn't have the
+     * expected version. Its parameters are the body, the time, in seconds since the epoch, from which the document
+     * can be removed if it is deleted, the partition key, twice, the local key and the expected version.
+     */
+    fun updateSql(): String =
+        "UPDATE $tableName SET $VERSION = $VERSION + 1, $BODY = ?, $DELETED = FROM_UNIXTIME(?) " +
+            "WHERE $PARTITION_HASH = CRC32(?) AND $PARTITION_KEY = ? AND $LOCAL_KEY = ? AND $VERSION = ?"
+
+    /**
      * Returns the script updating or checking the given number of documents. TiDB doesn't support stored procedures,
      * so the statements of the script are sent together, in a single request.
      *
@@ -76,8 +94,7 @@ class TiDbTable(table: String) {
      *
      * The last statement of the script returns null when the documents have been updated. When a document doesn't
      * have the expected version, none of the documents is updated, and the index of that document is returned. The
-     * script fails without committing its transaction, which must then be rolled back, when a document is locked or
-     * created by another transaction.
+     * script fails, without its transaction being committed, when a document is written by a concurrent transaction.
      */
     fun updateScript(count: Int): String =
         cachedUpdateStatement.getOrNull(count)?.value ?: createUpdateScript(count)
@@ -88,20 +105,18 @@ class TiDbTable(table: String) {
         return """
             SET @deleted = FROM_UNIXTIME(?);
 
-            -- Read the versions as they are once the rows have been locked
-            SET TRANSACTION ISOLATION LEVEL READ COMMITTED;
-
-            BEGIN PESSIMISTIC;
+            -- A concurrent write to any of the documents makes the commit fail
+            BEGIN OPTIMISTIC;
 
             -- The temporary table is emptied at the end of the transaction
             INSERT INTO $updateTableName
                 (i, $PARTITION_HASH, $PARTITION_KEY, $LOCAL_KEY, $VERSION, $BODY, $IS_CHECK)
             VALUES ${rows.joinToString()};
 
-            -- Lock the documents without waiting, so that a concurrent write to them causes a conflict
+            -- Include the checked documents in the conflict detection of the commit
             -- The hints read each row using its primary key, rather than reading the whole table
             SELECT /*+ INL_JOIN(t) */ t.$VERSION FROM $tableName t JOIN $updateTableName o ON $rowFilter
-            FOR UPDATE NOWAIT;
+            WHERE o.$IS_CHECK FOR UPDATE;
 
             -- Index of the first document with an unexpected version, if any
             SET @conflict = (
