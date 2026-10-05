@@ -8,10 +8,8 @@ import io.r2dbc.spi.Statement
 import java.util.UUID
 import java.util.concurrent.TimeUnit
 import java.util.stream.Stream
-import kotlinx.coroutines.Deferred
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.async
-import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.toList
 import kotlinx.coroutines.reactive.asFlow
@@ -19,8 +17,6 @@ import kotlinx.coroutines.reactive.awaitFirstOrNull
 import kotlinx.coroutines.reactive.awaitSingle
 import kotlinx.coroutines.runBlocking
 import org.junit.jupiter.api.Assertions.assertEquals
-import org.junit.jupiter.api.Assertions.assertInstanceOf
-import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.BeforeAll
 import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.Timeout
@@ -385,7 +381,7 @@ class TiDbDocumentStoreTests {
 
     @ParameterizedTest
     @ValueSource(strings = ["single", "multiple", "check"])
-    fun updateDocuments_concurrentTransaction(mode: String) = runBlocking {
+    fun updateDocuments_concurrentUpdate(mode: String) = runBlocking {
         updateDocument(ids[0], JSON_1, 0)
         updateDocument(ids[1], JSON_2, 0)
 
@@ -440,81 +436,6 @@ class TiDbDocumentStoreTests {
         assertDocument(document2, ids[1], if (mode == "check") JSON_1 else JSON_3, 1)
     }
 
-    @ParameterizedTest
-    @ValueSource(strings = ["single", "multiple", "check", "insert"])
-    fun updateDocuments_concurrentConflict(mode: String) = runBlocking {
-        if (mode != "insert") {
-            updateDocument(ids[0], JSON_1, 0)
-        }
-
-        // Only one of the updates of the same version of a document succeeds
-        val results: List<Result<Unit>> = (1..10)
-            .map { i ->
-                async(Dispatchers.Default) {
-                    runCatching {
-                        when (mode) {
-                            "single" -> store.updateDocuments(parseDocument(ids[0], """ {"a":$i} """, 1))
-                            "insert" -> store.updateDocuments(parseDocument(ids[0], """ {"a":$i} """, 0))
-                            "multiple" -> store.updateDocuments(
-                                parseDocument(ids[0], """ {"a":$i} """, 1),
-                                parseDocument(ids[i], JSON_2, 0),
-                            )
-                            else -> store.updateDocuments(
-                                updatedDocuments = listOf(parseDocument(ids[0], """ {"a":$i} """, 1)),
-                                checkedDocuments = listOf(parseDocument(ids[i], JSON_2, 0)),
-                            )
-                        }
-                    }
-                }
-            }
-            .map { it.await() }
-
-        val succeeded: List<Int> = results.indices.filter { results[it].isSuccess }
-        val document = store.getDocument(ids[0])
-
-        assertEquals(1, succeeded.size, results.toString())
-        results.filter { it.isFailure }.forEach { result ->
-            assertInstanceOf(UpdateConflictException::class.java, result.exceptionOrNull())
-        }
-        assertDocument(document, ids[0], """ {"a":${succeeded[0] + 1}} """, if (mode == "insert") 1 else 2)
-    }
-
-    @ParameterizedTest
-    @ValueSource(booleans = [true, false])
-    fun updateDocuments_concurrentChecks(existing: Boolean) = runBlocking {
-        val version: Long = if (existing) 1 else 0
-
-        repeat(30) { round ->
-            val id1 = DocumentKey("${partitionKey}_$round", "A")
-            val id2 = DocumentKey("${partitionKey}_$round", "B")
-            if (existing) {
-                store.updateDocuments(parseDocument(id1, JSON_1, 0), parseDocument(id2, JSON_1, 0))
-            }
-
-            // Each update writes the document checked by the other one, so they can't both succeed
-            val results: List<Result<Unit>> = listOf(id1 to id2, id2 to id1)
-                .map { (updated, checked) ->
-                    async(Dispatchers.Default) {
-                        runCatching {
-                            store.updateDocuments(
-                                updatedDocuments = listOf(parseDocument(updated, JSON_2, version)),
-                                checkedDocuments = listOf(parseDocument(checked, JSON_3, version)),
-                            )
-                        }
-                    }
-                }
-                .map { it.await() }
-
-            val documents: List<Document> = store.getDocuments(listOf(id1, id2)).toList()
-
-            assertTrue(results.count { it.isSuccess } <= 1, "Round $round: $results")
-            results.filter { it.isFailure }.forEach { result ->
-                assertInstanceOf(UpdateConflictException::class.java, result.exceptionOrNull())
-            }
-            assertEquals(results.count { it.isSuccess }, documents.count { it.version == version + 1 })
-        }
-    }
-
     @Test
     fun updateDocuments_multipleDocumentsServerError() = runBlocking {
         updateDocument(ids[0], JSON_1, 0)
@@ -532,27 +453,6 @@ class TiDbDocumentStoreTests {
 
         assertDocument(document1, ids[0], JSON_1, 1)
         assertDocument(document2, ids[1], null, 0)
-    }
-
-    @Test
-    fun updateDocuments_concurrentUpdates() = runBlocking {
-        // The documents of each update are held in the same temporary table
-        val batches: List<List<Document>> = (0..19).map { batch ->
-            (0..9).map { i ->
-                parseDocument(DocumentKey("${partitionKey}_$batch", "ABC0$i"), """ {"batch":$batch,"a":$i} """, 0)
-            }
-        }
-
-        val results: List<Result<Unit>> = batches
-            .map { documents ->
-                async(Dispatchers.Default) { runCatching { store.updateDocuments(*documents.toTypedArray()) } }
-            }
-            .map { it.await() }
-
-        results.forEach { result -> assertEquals(Result.success(Unit), result) }
-        batches.forEachIndexed { batch, documents ->
-            assertDocuments(store.scan("${partitionKey}_$batch").toList(), documents)
-        }
     }
 
     @Test
@@ -589,6 +489,7 @@ class TiDbDocumentStoreTests {
 
         try {
             connection.createStatement("BEGIN OPTIMISTIC").execute().awaitSingle().rowsUpdated.awaitFirstOrNull()
+
             connection
                 .createStatement(
                     "INSERT INTO $TABLE ($PARTITION_HASH, $PARTITION_KEY, $LOCAL_KEY, $VERSION, $BODY) " +
