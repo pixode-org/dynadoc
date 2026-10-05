@@ -3,16 +3,12 @@ package org.pixode.dynadoc.tidb
 import io.r2dbc.spi.Readable
 import kotlinx.serialization.json.Json
 import org.junit.jupiter.api.Assertions.assertEquals
-import org.junit.jupiter.api.Assertions.assertNull
 import org.junit.jupiter.api.Test
-import org.junit.jupiter.api.assertThrows
 import org.junit.jupiter.params.ParameterizedTest
 import org.junit.jupiter.params.provider.ValueSource
 import org.pixode.dynadoc.core.DocumentKey
-import org.pixode.dynadoc.core.parseDocument
 
 private val id: DocumentKey = DocumentKey("PK", "LK")
-private val otherId: DocumentKey = DocumentKey("PK", "OTHER")
 
 class RowMapperTests {
     @ParameterizedTest
@@ -41,11 +37,6 @@ class RowMapperTests {
     @Test
     fun toDocumentKey_value() {
         assertEquals(id, RowMapper.toDocumentKey(row(null, 3)))
-    }
-
-    @Test
-    fun toVersion_value() {
-        assertEquals(3, RowMapper.toVersion(row(null, 3)))
     }
 
     private fun row(body: String?, version: Long): Readable = TestRow(

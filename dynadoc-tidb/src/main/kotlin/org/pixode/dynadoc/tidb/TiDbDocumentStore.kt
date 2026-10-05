@@ -3,22 +3,23 @@ package org.pixode.dynadoc.tidb
 import io.r2dbc.spi.Connection
 import io.r2dbc.spi.ConnectionFactory
 import io.r2dbc.spi.R2dbcException
-import io.r2dbc.spi.Result
-import io.r2dbc.spi.Row
 import io.r2dbc.spi.Statement
 import java.util.Optional
+import kotlin.jvm.optionals.getOrNull
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.emitAll
 import kotlinx.coroutines.flow.emptyFlow
-import kotlinx.coroutines.flow.flatMapConcat
 import kotlinx.coroutines.flow.flow
+import kotlinx.coroutines.flow.last
+import kotlinx.coroutines.flow.lastOrNull
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.toList
 import kotlinx.coroutines.reactive.asFlow
 import kotlinx.coroutines.reactive.awaitFirstOrNull
 import kotlinx.coroutines.reactive.awaitSingle
 import kotlinx.coroutines.withContext
+import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonObject
 import org.pixode.dynadoc.core.Document
 import org.pixode.dynadoc.core.DocumentKey
@@ -87,19 +88,17 @@ class TiDbDocumentStore(
         val conflict: Long? = withConnection { connection ->
             try {
                 // Each statement of the script has its own result, the last one being the result of the script
-                connection.createStatement(table.updateScript(updatedList.size, checkedList.size))
+                connection.createStatement(table.updateScript(documents.size))
                     .apply { bindDocuments(updatedList, checkedList) }
                     .execute()
                     .asFlow()
                     .map { result ->
-                        result.map { row, _ -> Optional.ofNullable(row.get(0, Long::class.javaObjectType)) }
+                        result.map { row -> Optional.ofNullable(row.get(0, Long::class.javaObjectType)) }
                             .asFlow()
-                            .toList()
+                            .lastOrNull()
                     }
-                    .toList()
                     .last()
-                    .single()
-                    .orElse(null)
+                    ?.getOrNull()
             } catch (exception: Throwable) {
                 // The script stops at the statement that failed, leaving its transaction open
                 withContext(NonCancellable) {
@@ -123,28 +122,27 @@ class TiDbDocumentStore(
     private fun Statement.bindDocuments(updated: List<Document>, checked: List<Document>) {
         var index = 0
 
-        fun bindDocument(document: Document) {
+        fun bindDocument(document: Document, body: JsonElement?, check: Boolean) {
             bind(index++, document.id.partitionKey)
             bind(index++, document.id.partitionKey)
             bind(index++, document.id.localKey)
             bind(index++, document.version)
-        }
 
-        updated.forEach { document ->
-            bindDocument(document)
-
-            if (document.body == null) {
+            if (body == null) {
                 bindNull(index++, String::class.java)
             } else {
-                require(document.body is JsonObject) {
+                require(body is JsonObject) {
                     "The document must be a valid JSON object"
                 }
 
-                bind(index++, document.body.toString())
+                bind(index++, body.toString())
             }
+
+            bind(index++, check)
         }
 
-        checked.forEach(::bindDocument)
+        updated.forEach { document -> bindDocument(document, document.body, false) }
+        checked.forEach { document -> bindDocument(document, null, true) }
     }
 
     //endregion
@@ -166,7 +164,7 @@ class TiDbDocumentStore(
 
         val documents: Map<DocumentKey, Document> = withConnection { connection ->
             connection.createStatement(selectKeysSql(distinctIds.size))
-                .bindKeys(distinctIds)
+                .apply { bindKeys(distinctIds) }
                 .asDocuments()
                 .toList()
                 .associateBy { it.id }
@@ -174,6 +172,19 @@ class TiDbDocumentStore(
 
         for (id in idList) {
             emit(documents[id] ?: Document(id, null, 0))
+        }
+    }
+
+    // Each row is read directly using an equality on the whole primary key, whereas a single condition matching all
+    // the keys can result in the whole table being read
+    private fun selectKeysSql(count: Int): String =
+        (0 until count).joinToString(" UNION ALL ") { "$selectSql WHERE $keyFilter" }
+
+    private fun Statement.bindKeys(ids: List<DocumentKey>) {
+        ids.forEachIndexed { index, id ->
+            bind(index * 3, id.partitionKey)
+            bind(index * 3 + 1, id.partitionKey)
+            bind(index * 3 + 2, id.localKey)
         }
     }
 
@@ -263,17 +274,4 @@ class TiDbDocumentStore(
             emitAll(result.map(RowMapper::toDocument).asFlow())
         }
     }
-
-    private fun Statement.bindKeys(ids: List<DocumentKey>): Statement {
-        ids.forEachIndexed { index, id ->
-            bind(index * 3, id.partitionKey).bind(index * 3 + 1, id.partitionKey).bind(index * 3 + 2, id.localKey)
-        }
-
-        return this
-    }
-
-    // Each row is read directly using an equality on the whole primary key, whereas a single condition matching all
-    // the keys can result in the whole table being read
-    private fun selectKeysSql(count: Int): String =
-        (0 until count).joinToString(" UNION ALL ") { "$selectSql WHERE $keyFilter" }
 }
