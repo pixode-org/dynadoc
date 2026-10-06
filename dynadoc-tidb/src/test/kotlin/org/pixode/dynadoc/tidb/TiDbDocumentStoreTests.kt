@@ -226,7 +226,6 @@ class TiDbDocumentStoreTests {
         assertDocument(document, ids[0], null, 0)
     }
 
-
     @Test
     fun updateDocuments_multipleDocumentsServerError() = runBlocking {
         updateDocument(ids[0], JSON_1, 0)

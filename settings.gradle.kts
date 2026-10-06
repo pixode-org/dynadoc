@@ -8,8 +8,5 @@ include(
     "dynadoc",
     "dynadoc-jackson",
     "dynadoc-dynamodb",
-    "dynadoc-mongodb",
-    "dynadoc-tikv",
     "dynadoc-tidb",
-    "dynadoc-yugabytedb",
 )
