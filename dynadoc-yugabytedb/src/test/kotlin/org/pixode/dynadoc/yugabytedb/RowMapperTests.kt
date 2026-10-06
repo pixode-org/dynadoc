@@ -10,7 +10,7 @@ import org.junit.jupiter.params.provider.ValueSource
 import org.pixode.dynadoc.core.DocumentKey
 import org.pixode.dynadoc.core.parseDocument
 
-private val id: DocumentKey = DocumentKey("PK", "LK")
+private val id: DocumentKey = DocumentKey("PK", "SK")
 private val otherId: DocumentKey = DocumentKey("PK", "OTHER")
 
 class RowMapperTests {
@@ -28,9 +28,9 @@ class RowMapperTests {
             Json.parseToJsonElement(
                 """
                 [
-                    {"partition_key":"PK","local_key":"LK","version":4,"body":{"a":1.50,"n":1234567890.0987654321},"check":false},
-                    {"partition_key":"PK","local_key":"OTHER","version":0,"body":null,"check":false},
-                    {"partition_key":"PK","local_key":"LK","version":2,"body":null,"check":true}
+                    {"partition_key":"PK","sort_key":"SK","version":4,"body":{"a":1.50,"n":1234567890.0987654321},"check":false},
+                    {"partition_key":"PK","sort_key":"OTHER","version":0,"body":null,"check":false},
+                    {"partition_key":"PK","sort_key":"SK","version":2,"body":null,"check":true}
                 ]
                 """
             ),
@@ -58,7 +58,7 @@ class RowMapperTests {
         val operations: String = RowMapper.fromDocuments(emptyList(), listOf(parseDocument(id, """ "a" """, 1)))
 
         assertEquals(
-            Json.parseToJsonElement(""" [{"partition_key":"PK","local_key":"LK","version":1,"body":null,"check":true}] """),
+            Json.parseToJsonElement(""" [{"partition_key":"PK","sort_key":"SK","version":1,"body":null,"check":true}] """),
             Json.parseToJsonElement(operations),
         )
     }
@@ -67,7 +67,7 @@ class RowMapperTests {
     @ValueSource(
         strings = [
             """ {"a":"b"} """,
-            """ {"partition_key":"x","local_key":"y","version":10,"body":null} """,
+            """ {"partition_key":"x","sort_key":"y","version":10,"body":null} """,
             """ {"n":1234567890.0987654321,"m":99999999999999999999,"e":1e3} """,
             """ {"a":{"b":[1,"c",null,true,{}]}} """,
         ],
@@ -99,7 +99,7 @@ class RowMapperTests {
     private fun row(body: String?, version: Long): Readable = TestRow(
         mapOf(
             PARTITION_KEY to id.partitionKey,
-            LOCAL_KEY to id.localKey,
+            SORT_KEY to id.sortKey,
             VERSION to version,
             BODY to body,
         )

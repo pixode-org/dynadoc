@@ -20,8 +20,8 @@ data class JsonEntity<out T>(
 fun <T, U> JsonEntity<T>.modify(transform: T.() -> U) =
     JsonEntity(id, transform(entity), version)
 
-fun <T : Any> createEntity(partitionKey: String, localKey: String, entity: T) =
-    JsonEntity(DocumentKey(partitionKey, localKey), entity, 0)
+fun <T : Any> createEntity(partitionKey: String, sortKey: String, entity: T) =
+    JsonEntity(DocumentKey(partitionKey, sortKey), entity, 0)
 
 @Suppress("UNCHECKED_CAST")
 fun <T : Any> JsonEntity<T?>.ifExists(): JsonEntity<T>? =

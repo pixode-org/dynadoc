@@ -52,7 +52,7 @@ class BsonMapperTests {
         assertEquals(
             BsonDocument()
                 .append(PARTITION_KEY, BsonString("PK"))
-                .append(LOCAL_KEY, BsonString("SK")),
+                .append(SORT_KEY, BsonString("SK")),
             bson[ID],
         )
         assertEquals(2L, bson[VERSION]?.asInt64()?.value)
@@ -63,7 +63,7 @@ class BsonMapperTests {
     fun fromDocument_idFieldOrder() {
         val bson: BsonDocument = fromDocument(""" { "key": "abc" } """)
 
-        assertEquals(listOf(PARTITION_KEY, LOCAL_KEY), bson.getDocument(ID).keys.toList())
+        assertEquals(listOf(PARTITION_KEY, SORT_KEY), bson.getDocument(ID).keys.toList())
     }
 
     @Test
@@ -72,7 +72,7 @@ class BsonMapperTests {
 
         assertEquals(3, bson.size)
         assertEquals("PK", bson.getDocument(ID).getString(PARTITION_KEY).value)
-        assertEquals("SK", bson.getDocument(ID).getString(LOCAL_KEY).value)
+        assertEquals("SK", bson.getDocument(ID).getString(SORT_KEY).value)
         assertEquals(2L, bson[VERSION]?.asInt64()?.value)
         assertEquals(
             Instant.parse("2024-01-01T20:02:30Z").toEpochMilli(),
@@ -135,7 +135,7 @@ class BsonMapperTests {
             """ { "key": [ 2, 3 ] } """,
             """ { "key": [ 2, "abc", { "sub": 2 } ] } """,
             """ { "key": { "sub": 2, "arr": [ 2, "abc" ] } } """,
-            """ { "pk": "a", "lk": "b" } """,
+            """ { "pk": "a", "sk": "b" } """,
             """ { } """,
         ],
     )

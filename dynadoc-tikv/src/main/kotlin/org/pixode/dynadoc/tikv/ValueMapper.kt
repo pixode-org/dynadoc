@@ -12,14 +12,14 @@ import org.pixode.dynadoc.core.Document
 import org.pixode.dynadoc.core.DocumentKey
 
 const val PARTITION_KEY = "partition_key"
-const val LOCAL_KEY = "local_key"
+const val SORT_KEY = "sort_key"
 const val VERSION = "version"
 const val BODY = "body"
 
 /**
  * Maps documents to TiKV values.
  *
- * A value is a UTF-8 encoded JSON object of the form `{ partition_key, local_key, version, body }`. The document key is stored in the
+ * A value is a UTF-8 encoded JSON object of the form `{ partition_key, sort_key, version, body }`. The document key is stored in the
  * value since it can't be recovered from the TiKV key. A deleted document is stored with a null body.
  */
 class ValueMapper {
@@ -30,7 +30,7 @@ class ValueMapper {
         return Document(
             id = DocumentKey(
                 partitionKey = json.getValue(PARTITION_KEY).jsonPrimitive.content,
-                localKey = json.getValue(LOCAL_KEY).jsonPrimitive.content,
+                sortKey = json.getValue(SORT_KEY).jsonPrimitive.content,
             ),
             body = if (body is JsonNull) null else body,
             version = json.getValue(VERSION).jsonPrimitive.long,
@@ -46,7 +46,7 @@ class ValueMapper {
         val json = JsonObject(
             mapOf(
                 PARTITION_KEY to JsonPrimitive(document.id.partitionKey),
-                LOCAL_KEY to JsonPrimitive(document.id.localKey),
+                SORT_KEY to JsonPrimitive(document.id.sortKey),
                 VERSION to JsonPrimitive(document.version + 1),
                 BODY to (body ?: JsonNull),
             )

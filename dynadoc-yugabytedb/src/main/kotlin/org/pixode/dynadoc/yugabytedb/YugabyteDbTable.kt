@@ -18,9 +18,9 @@ class YugabyteDbTable(table: String) {
     }
 
     /**
-     * Creates the table, range-sharded by hash of the partition key, then partition key, then local key, so that the
+     * Creates the table, range-sharded by hash of the partition key, then partition key, then sort key, so that the
      * partitions are spread evenly across the tablets, and the documents of a partition are stored together and
-     * sorted by local key.
+     * sorted by sort key.
      *
      * The table is initially split into 256 tablets, each holding an equal share of the hashes.
      * Tablets are then split automatically as they grow, including within a partition.
@@ -33,10 +33,10 @@ class YugabyteDbTable(table: String) {
             CREATE TABLE IF NOT EXISTS $tableName (
                 $PARTITION_HASH INT NOT NULL,
                 $PARTITION_KEY TEXT COLLATE "C" NOT NULL,
-                $LOCAL_KEY TEXT COLLATE "C" NOT NULL,
+                $SORT_KEY TEXT COLLATE "C" NOT NULL,
                 $VERSION BIGINT NOT NULL,
                 $BODY JSONB,
-                PRIMARY KEY ($PARTITION_HASH ASC, $PARTITION_KEY ASC, $LOCAL_KEY ASC),
+                PRIMARY KEY ($PARTITION_HASH ASC, $PARTITION_KEY ASC, $SORT_KEY ASC),
                 CHECK ($PARTITION_HASH = yb_hash_code($PARTITION_KEY))
             ) SPLIT AT VALUES (${(1 until TABLET_COUNT).joinToString { i -> "(${HASH_COUNT * i / TABLET_COUNT})" }})
             """.trimIndent()
@@ -52,7 +52,7 @@ class YugabyteDbTable(table: String) {
      */
     fun createFunctionSql(): String {
         val rowFilter =
-            "$PARTITION_HASH = v_partition_hash AND $PARTITION_KEY = v_partition_key AND $LOCAL_KEY = v_local_key"
+            "$PARTITION_HASH = v_partition_hash AND $PARTITION_KEY = v_partition_key AND $SORT_KEY = v_sort_key"
 
         return """
             CREATE OR REPLACE FUNCTION $updateFunction(p_operations JSONB) RETURNS INT
@@ -62,7 +62,7 @@ class YugabyteDbTable(table: String) {
                 v_operation JSONB;
                 v_partition_hash INT;
                 v_partition_key TEXT;
-                v_local_key TEXT;
+                v_sort_key TEXT;
                 v_check BOOLEAN;
                 v_body JSONB;
                 v_expected_version BIGINT;
@@ -75,7 +75,7 @@ class YugabyteDbTable(table: String) {
                         SELECT value FROM jsonb_array_elements(p_operations) WITH ORDINALITY ORDER BY ordinality
                     LOOP
                         v_partition_key := v_operation->>'$PARTITION_KEY';
-                        v_local_key := v_operation->>'$LOCAL_KEY';
+                        v_sort_key := v_operation->>'$SORT_KEY';
                         v_partition_hash := yb_hash_code(v_partition_key);
                         v_check := (v_operation->>'$CHECK')::BOOLEAN;
                         v_body := NULLIF(v_operation->'$BODY', 'null'::JSONB);
@@ -90,8 +90,8 @@ class YugabyteDbTable(table: String) {
                         END IF;
 
                         IF v_current_version IS NULL THEN
-                            INSERT INTO $tableName ($PARTITION_HASH, $PARTITION_KEY, $LOCAL_KEY, $VERSION, $BODY)
-                            VALUES (v_partition_hash, v_partition_key, v_local_key, 1, v_body)
+                            INSERT INTO $tableName ($PARTITION_HASH, $PARTITION_KEY, $SORT_KEY, $VERSION, $BODY)
+                            VALUES (v_partition_hash, v_partition_key, v_sort_key, 1, v_body)
                             ON CONFLICT DO NOTHING;
 
                             GET DIAGNOSTICS v_rows = ROW_COUNT;

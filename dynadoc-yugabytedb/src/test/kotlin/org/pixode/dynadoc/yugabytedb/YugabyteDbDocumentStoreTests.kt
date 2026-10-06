@@ -154,7 +154,7 @@ class YugabyteDbDocumentStoreTests {
 
     @Test
     fun updateDocuments_noReservedFields() = runBlocking {
-        val json = """ {"partition_key":"a","local_key":"b","version":3,"body":null} """
+        val json = """ {"partition_key":"a","sort_key":"b","version":3,"body":null} """
         updateDocument(json, 0)
 
         val document = store.getDocument(ids[0])
@@ -523,10 +523,10 @@ class YugabyteDbDocumentStoreTests {
         // A document stored under the wrong hash would not be found by the store
         val exception = assertThrows<R2dbcException> {
             execute(
-                "INSERT INTO $TABLE ($PARTITION_HASH, $PARTITION_KEY, $LOCAL_KEY, $VERSION, $BODY) " +
+                "INSERT INTO $TABLE ($PARTITION_HASH, $PARTITION_KEY, $SORT_KEY, $VERSION, $BODY) " +
                     "VALUES (yb_hash_code($1::text) + 1, $1, $2, 1, NULL)",
                 ids[0].partitionKey,
-                ids[0].localKey,
+                ids[0].sortKey,
             )
         }
 
@@ -545,13 +545,13 @@ class YugabyteDbDocumentStoreTests {
             connection.beginTransaction().awaitFirstOrNull()
             connection
                 .createStatement(
-                    "INSERT INTO $TABLE ($PARTITION_HASH, $PARTITION_KEY, $LOCAL_KEY, $VERSION, $BODY) " +
+                    "INSERT INTO $TABLE ($PARTITION_HASH, $PARTITION_KEY, $SORT_KEY, $VERSION, $BODY) " +
                         "VALUES (yb_hash_code($1::text), $1, $2, $3, CAST($4 AS jsonb)) " +
-                        "ON CONFLICT ($PARTITION_HASH, $PARTITION_KEY, $LOCAL_KEY) " +
+                        "ON CONFLICT ($PARTITION_HASH, $PARTITION_KEY, $SORT_KEY) " +
                         "DO UPDATE SET $VERSION = EXCLUDED.$VERSION, $BODY = EXCLUDED.$BODY"
                 )
                 .bind(0, document.id.partitionKey)
-                .bind(1, document.id.localKey)
+                .bind(1, document.id.sortKey)
                 .bind(2, document.version + 1)
                 .bind(3, checkNotNull(document.body).toString())
                 .execute()
@@ -639,7 +639,7 @@ class YugabyteDbDocumentStoreTests {
         val documents = (0..9).map { i ->
             parseDocument(DocumentKey(partitionKey, "ABC0$i"), """ {"a":$i} """, 0)
         }
-        // Documents with the same local keys in another partition
+        // Documents with the same sort keys in another partition
         val otherDocuments = (0..9).map { i ->
             parseDocument(DocumentKey("${partitionKey}_other", "ABC0$i"), """ {"b":$i} """, 0)
         }
@@ -672,9 +672,9 @@ class YugabyteDbDocumentStoreTests {
 
     @Test
     fun scan_byteOrder() = runBlocking {
-        // Local keys are sorted by their UTF-8 encoding, regardless of the locale of the database
-        val localKeys: List<String> = listOf("B", "a", "é")
-        val documents = localKeys.map { parseDocument(DocumentKey(partitionKey, it), JSON_1, 0) }
+        // Sort keys are ordered by their UTF-8 encoding, regardless of the locale of the database
+        val sortKeys: List<String> = listOf("B", "a", "é")
+        val documents = sortKeys.map { parseDocument(DocumentKey(partitionKey, it), JSON_1, 0) }
         store.updateDocuments(*documents.reversed().toTypedArray())
 
         val result = store.scan(partitionKey)
@@ -694,7 +694,7 @@ class YugabyteDbDocumentStoreTests {
         store.updateDocuments(*documents.toTypedArray())
 
         val result = store.query(
-            "$PARTITION_FILTER AND ($BODY->>'a')::int > $2 ORDER BY $LOCAL_KEY",
+            "$PARTITION_FILTER AND ($BODY->>'a')::int > $2 ORDER BY $SORT_KEY",
             partitionKey,
             4,
         )
@@ -731,7 +731,7 @@ class YugabyteDbDocumentStoreTests {
         documents.chunked(100).forEach { chunk -> store.updateDocuments(*chunk.toTypedArray()) }
 
         val result = store.query(
-            "$PARTITION_FILTER AND $LOCAL_KEY >= $2 AND $LOCAL_KEY <= $3 ORDER BY $LOCAL_KEY",
+            "$PARTITION_FILTER AND $SORT_KEY >= $2 AND $SORT_KEY <= $3 ORDER BY $SORT_KEY",
             partitionKey,
             "ABC0120",
             "ABC0380",

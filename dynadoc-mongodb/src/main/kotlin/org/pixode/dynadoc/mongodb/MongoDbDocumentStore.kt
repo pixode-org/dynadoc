@@ -44,7 +44,7 @@ private const val ADMIN_DATABASE = "admin"
 /**
  * Represents an implementation of the [DocumentStore] interface that relies on MongoDB for persistence.
  *
- * Documents are stored with an `_id` of the form `{ pk, lk }`, where `pk` is the partition key and `lk` the local
+ * Documents are stored with an `_id` of the form `{ pk, sk }`, where `pk` is the partition key and `sk` the sort
  * key, and a `_version` field.
  * Updating multiple documents atomically relies on MongoDB transactions, which require a replica set or a sharded
  * cluster, and on client bulk writes, which require MongoDB 8.0 or later.
@@ -276,7 +276,7 @@ class MongoDbDocumentStore(
     /**
      * Creates the collection as a clustered collection ordered by document key, along with a TTL index on deleted
      * documents.
-     * If [sharded] is true, the collection is also sharded by hashed partition key then ascending local key, which
+     * If [sharded] is true, the collection is also sharded by hashed partition key then ascending sort key, which
      * requires a sharded cluster.
      */
     suspend fun createCollection(sharded: Boolean = true) {
@@ -289,7 +289,7 @@ class MongoDbDocumentStore(
         if (sharded) {
             val shardKey: Bson = Indexes.compoundIndex(
                 Indexes.hashed("$ID.$PARTITION_KEY"),
-                Indexes.ascending("$ID.$LOCAL_KEY"),
+                Indexes.ascending("$ID.$SORT_KEY"),
             )
             client.getDatabase(ADMIN_DATABASE).runCommand(
                 BsonDocument("shardCollection", BsonString(namespace.fullName))

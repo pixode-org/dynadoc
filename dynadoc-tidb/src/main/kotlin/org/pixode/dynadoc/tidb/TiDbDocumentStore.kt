@@ -37,8 +37,8 @@ private val conflictCodes: Set<Int> =
  * Represents an implementation of the [DocumentStore] interface that relies on TiDB for persistence.
  *
  * Documents are stored in a table whose clustered primary key is made of a hash of the partition key, the partition
- * key and the local key, with a `version` column and a JSON `body` column (see [createTable]). The hash spreads the
- * partitions evenly across the regions, while the documents of a partition are stored together, sorted by local key,
+ * key and the sort key, with a `version` column and a JSON `body` column (see [createTable]). The hash spreads the
+ * partitions evenly across the regions, while the documents of a partition are stored together, sorted by sort key,
  * and can be split across several regions. Deleted documents are kept with a null body so that their version is
  * preserved, until they are removed by the TTL jobs of the database, once [expiration] has elapsed.
  *
@@ -59,10 +59,10 @@ class TiDbDocumentStore(
     private val table = TiDbTable(tableName)
 
     private val partitionFilter: String = "$PARTITION_HASH = CRC32(?) AND $PARTITION_KEY = ?"
-    private val keyFilter: String = "$partitionFilter AND $LOCAL_KEY = ?"
+    private val keyFilter: String = "$partitionFilter AND $SORT_KEY = ?"
 
     private val selectSql: String =
-        "SELECT $PARTITION_KEY, $LOCAL_KEY, $VERSION, CAST($BODY AS CHAR) AS $BODY FROM ${table.tableName}"
+        "SELECT $PARTITION_KEY, $SORT_KEY, $VERSION, CAST($BODY AS CHAR) AS $BODY FROM ${table.tableName}"
 
     //region updateDocuments
 
@@ -95,7 +95,7 @@ class TiDbDocumentStore(
                             connection.createStatement(table.insertSql)
                                 .bind(0, document.id.partitionKey)
                                 .bind(1, document.id.partitionKey)
-                                .bind(2, document.id.localKey)
+                                .bind(2, document.id.sortKey)
                                 .bindNullable(3, body, String::class.java)
                                 .bindNullable(4, deleted, Long::class.javaObjectType)
                         } else {
@@ -104,7 +104,7 @@ class TiDbDocumentStore(
                                 .bindNullable(1, deleted, Long::class.javaObjectType)
                                 .bind(2, document.id.partitionKey)
                                 .bind(3, document.id.partitionKey)
-                                .bind(4, document.id.localKey)
+                                .bind(4, document.id.sortKey)
                                 .bind(5, document.version)
                         }
 
@@ -188,7 +188,7 @@ class TiDbDocumentStore(
         for ((document, body) in written) {
             bind(index++, document.id.partitionKey)
             bind(index++, document.id.partitionKey)
-            bind(index++, document.id.localKey)
+            bind(index++, document.id.sortKey)
             bind(index++, document.version + 1)
             bindNullable(index++, body, String::class.java)
             bindNullable(index++, if (body == null) deleted else null, Long::class.javaObjectType)
@@ -244,7 +244,7 @@ class TiDbDocumentStore(
         ids.forEachIndexed { index, id ->
             bind(index * 3, id.partitionKey)
             bind(index * 3 + 1, id.partitionKey)
-            bind(index * 3 + 2, id.localKey)
+            bind(index * 3 + 2, id.sortKey)
         }
     }
 
@@ -253,25 +253,25 @@ class TiDbDocumentStore(
     //region scan and query
 
     /**
-     * Retrieves the documents of a partition, sorted by local key, whose local key is greater than or equal to
-     * [startLocalKey] and lower than [endLocalKey]. When [endLocalKey] is null, all the documents of the partition
-     * starting from [startLocalKey] are returned. Deleted documents are included, with a null body.
+     * Retrieves the documents of a partition, sorted by sort key, whose sort key is greater than or equal to
+     * [startSortKey] and lower than [endSortKey]. When [endSortKey] is null, all the documents of the partition
+     * starting from [startSortKey] are returned. Deleted documents are included, with a null body.
      */
-    fun scan(partitionKey: String, startLocalKey: String = "", endLocalKey: String? = null): Flow<Document> {
-        val range: String = if (endLocalKey == null) "" else " AND $LOCAL_KEY < ?"
+    fun scan(partitionKey: String, startSortKey: String = "", endSortKey: String? = null): Flow<Document> {
+        val range: String = if (endSortKey == null) "" else " AND $SORT_KEY < ?"
 
-        return select("$partitionFilter AND $LOCAL_KEY >= ?$range ORDER BY $LOCAL_KEY") {
-            bind(0, partitionKey).bind(1, partitionKey).bind(2, startLocalKey)
+        return select("$partitionFilter AND $SORT_KEY >= ?$range ORDER BY $SORT_KEY") {
+            bind(0, partitionKey).bind(1, partitionKey).bind(2, startSortKey)
 
-            if (endLocalKey != null) {
-                bind(3, endLocalKey)
+            if (endSortKey != null) {
+                bind(3, endSortKey)
             }
         }
     }
 
     /**
      * Finds the documents matching the given condition, which is a SQL expression following the `WHERE` keyword and
-     * referring to the columns `partition_hash`, `partition_key`, `local_key`, `version` and `body`. The values of the
+     * referring to the columns `partition_hash`, `partition_key`, `sort_key`, `version` and `body`. The values of the
      * parameters `?` are given by [values], in that order.
      *
      * The documents of a partition are read directly when the condition specifies both the hash of the partition key
@@ -298,9 +298,9 @@ class TiDbDocumentStore(
     //region createTable
 
     /**
-     * Creates the table, clustered by hash of the partition key, then partition key, then local key, so that the
+     * Creates the table, clustered by hash of the partition key, then partition key, then sort key, so that the
      * partitions are spread evenly across the regions, and the documents of a partition are stored together and
-     * sorted by local key.
+     * sorted by sort key.
      */
     suspend fun createTable() {
         withConnection { connection ->

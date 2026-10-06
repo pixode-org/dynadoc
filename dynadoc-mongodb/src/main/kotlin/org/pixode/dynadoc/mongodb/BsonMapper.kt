@@ -29,7 +29,7 @@ import org.pixode.dynadoc.core.DocumentKey
 
 const val ID = "_id"
 const val PARTITION_KEY = "pk"
-const val LOCAL_KEY = "lk"
+const val SORT_KEY = "sk"
 const val VERSION = "_version"
 const val DELETED = "_deleted"
 
@@ -85,13 +85,13 @@ class BsonMapper(
     fun fromDocumentKey(id: DocumentKey): BsonDocument = BsonDocument(
         listOf(
             BsonElement(PARTITION_KEY, BsonString(id.partitionKey)),
-            BsonElement(LOCAL_KEY, BsonString(id.localKey)),
+            BsonElement(SORT_KEY, BsonString(id.sortKey)),
         )
     )
 
     fun toDocumentKey(id: BsonDocument): DocumentKey = DocumentKey(
         partitionKey = id.getValue(PARTITION_KEY).asString().value,
-        localKey = id.getValue(LOCAL_KEY).asString().value,
+        sortKey = id.getValue(SORT_KEY).asString().value,
     )
 
     private fun jsonElementToBsonValue(element: JsonElement): BsonValue = when (element) {

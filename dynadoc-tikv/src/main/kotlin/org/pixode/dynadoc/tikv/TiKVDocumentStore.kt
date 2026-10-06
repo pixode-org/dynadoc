@@ -40,7 +40,7 @@ private const val ROLLBACK_MAX_BACKOFF_MS = 5000
  * Represents an implementation of the [DocumentStore] interface that relies on the transactional API of TiKV for
  * persistence.
  *
- * Documents are stored under a key made of a hash of the namespace, a hash of the partition key and the local key
+ * Documents are stored under a key made of a hash of the namespace, a hash of the partition key and the sort key
  * (see [KeyMapper]), with a JSON value holding the document key, the version and the body (see [ValueMapper]).
  * Deleted documents are kept with a null body so that their version is preserved.
  *
@@ -360,15 +360,15 @@ class TiKVDocumentStore(
     //endregion
 
     /**
-     * Retrieves the documents of a partition, sorted by local key, whose local key is greater than or equal to
-     * [startLocalKey] and lower than [endLocalKey]. When [endLocalKey] is null, all the documents of the partition
-     * starting from [startLocalKey] are returned. Deleted documents are included, with a null body.
+     * Retrieves the documents of a partition, sorted by sort key, whose sort key is greater than or equal to
+     * [startSortKey] and lower than [endSortKey]. When [endSortKey] is null, all the documents of the partition
+     * starting from [startSortKey] are returned. Deleted documents are included, with a null body.
      */
-    fun scan(partitionKey: String, startLocalKey: String = "", endLocalKey: String? = null): Flow<Document> = flow {
+    fun scan(partitionKey: String, startSortKey: String = "", endSortKey: String? = null): Flow<Document> = flow {
         val prefix: ByteArray = keyMapper.partitionPrefix(partitionKey)
-        val startKey: ByteArray = prefix + startLocalKey.toByteArray(Charsets.UTF_8)
+        val startKey: ByteArray = prefix + startSortKey.toByteArray(Charsets.UTF_8)
         val endKey: ByteArray =
-            if (endLocalKey == null) prefixEnd(prefix) else prefix + endLocalKey.toByteArray(Charsets.UTF_8)
+            if (endSortKey == null) prefixEnd(prefix) else prefix + endSortKey.toByteArray(Charsets.UTF_8)
 
         // The iterator loads the pairs region by region, in batches
         val pairs: Iterator<Kvrpcpb.KvPair> = ConcreteScanIterator(

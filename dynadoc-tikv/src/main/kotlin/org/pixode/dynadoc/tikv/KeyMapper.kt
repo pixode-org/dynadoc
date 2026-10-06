@@ -10,15 +10,15 @@ const val PARTITION_HASH_LENGTH = 16
  * Maps document keys to TiKV keys.
  *
  * A TiKV key is the concatenation of the first [NAMESPACE_HASH_LENGTH] bytes of the SHA-256 hash of the namespace,
- * the first [PARTITION_HASH_LENGTH] bytes of the SHA-256 hash of the partition key, and the local key, all strings
+ * the first [PARTITION_HASH_LENGTH] bytes of the SHA-256 hash of the partition key, and the sort key, all strings
  * being encoded in UTF-8. Partitions are therefore spread across the key space of the namespace, while the documents
- * of a partition are stored together and sorted by local key.
+ * of a partition are stored together and sorted by sort key.
  */
 class KeyMapper(namespace: String) {
     private val prefix: ByteArray = hash(namespace, NAMESPACE_HASH_LENGTH)
 
     fun fromDocumentKey(id: DocumentKey): ByteArray =
-        partitionPrefix(id.partitionKey) + id.localKey.toByteArray(Charsets.UTF_8)
+        partitionPrefix(id.partitionKey) + id.sortKey.toByteArray(Charsets.UTF_8)
 
     fun partitionPrefix(partitionKey: String): ByteArray =
         prefix + hash(partitionKey, PARTITION_HASH_LENGTH)

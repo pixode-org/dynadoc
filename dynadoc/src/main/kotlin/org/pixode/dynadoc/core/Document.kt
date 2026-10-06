@@ -25,9 +25,9 @@ data class DocumentKey(
     val partitionKey: String,
 
     /** The value uniquely identifying the document within its partition. **/
-    val localKey: String,
+    val sortKey: String,
 ) {
-    override fun toString() = "(\"$partitionKey\", \"$localKey\")"
+    override fun toString() = "(\"$partitionKey\", \"$sortKey\")"
 }
 
 

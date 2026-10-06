@@ -140,7 +140,7 @@ class TiKVDocumentStoreTests {
 
     @Test
     fun updateDocuments_noReservedFields() = runBlocking {
-        val json = """ {"partition_key":"a","local_key":"b","version":3,"body":null} """
+        val json = """ {"partition_key":"a","sort_key":"b","version":3,"body":null} """
         updateDocument(json, 0)
 
         val document = store.getDocument(ids[0])
@@ -486,7 +486,7 @@ class TiKVDocumentStoreTests {
         val documents = (0..9).map { i ->
             parseDocument(DocumentKey(partitionKey, "ABC0$i"), """ {"a":$i} """, 0)
         }
-        // Documents with the same local keys in another partition
+        // Documents with the same sort keys in another partition
         val otherDocuments = (0..9).map { i ->
             parseDocument(DocumentKey("${partitionKey}_other", "ABC0$i"), """ {"b":$i} """, 0)
         }

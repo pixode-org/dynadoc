@@ -9,7 +9,7 @@ import org.junit.jupiter.params.provider.ValueSource
 import org.pixode.dynadoc.core.DocumentKey
 import org.pixode.dynadoc.core.parseDocument
 
-private val id: DocumentKey = DocumentKey("PK", "LK")
+private val id: DocumentKey = DocumentKey("PK", "SK")
 
 class ValueMapperTests {
     private val valueMapper = ValueMapper()
@@ -19,7 +19,7 @@ class ValueMapperTests {
         val value: ByteArray = valueMapper.fromDocument(parseDocument(id, """ {"a":1.50} """, 4))
 
         assertEquals(
-            Json.parseToJsonElement(""" {"partition_key":"PK","local_key":"LK","version":5,"body":{"a":1.50}} """),
+            Json.parseToJsonElement(""" {"partition_key":"PK","sort_key":"SK","version":5,"body":{"a":1.50}} """),
             Json.parseToJsonElement(value.toString(Charsets.UTF_8)),
         )
     }
@@ -29,7 +29,7 @@ class ValueMapperTests {
         val value: ByteArray = valueMapper.fromDocument(parseDocument(id, null, 4))
 
         assertEquals(
-            Json.parseToJsonElement(""" {"partition_key":"PK","local_key":"LK","version":5,"body":null} """),
+            Json.parseToJsonElement(""" {"partition_key":"PK","sort_key":"SK","version":5,"body":null} """),
             Json.parseToJsonElement(value.toString(Charsets.UTF_8)),
         )
     }
@@ -54,7 +54,7 @@ class ValueMapperTests {
     @ValueSource(
         strings = [
             """ {"a":"b"} """,
-            """ {"partition_key":"x","local_key":"y","version":10,"body":null} """,
+            """ {"partition_key":"x","sort_key":"y","version":10,"body":null} """,
             """ {"n":1234567890.0987654321,"m":99999999999999999999,"e":1e3} """,
             """ {"a":{"b":[1,"c",null,true,{}]}} """,
         ],

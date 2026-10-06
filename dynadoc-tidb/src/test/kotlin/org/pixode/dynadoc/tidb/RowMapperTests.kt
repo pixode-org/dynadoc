@@ -9,14 +9,14 @@ import org.junit.jupiter.params.ParameterizedTest
 import org.junit.jupiter.params.provider.ValueSource
 import org.pixode.dynadoc.core.DocumentKey
 
-private val id: DocumentKey = DocumentKey("PK", "LK")
+private val id: DocumentKey = DocumentKey("PK", "SK")
 
 class RowMapperTests {
     @ParameterizedTest
     @ValueSource(
         strings = [
             """ {"a":"b"} """,
-            """ {"partition_key":"x","local_key":"y","version":10,"body":null} """,
+            """ {"partition_key":"x","sort_key":"y","version":10,"body":null} """,
             """ {"n":1234567890.0987654321,"m":99999999999999999999,"e":1e3} """,
             """ {"a":{"b":[1,"c",null,true,{}]}} """,
         ],
@@ -41,7 +41,7 @@ class RowMapperTests {
     }
 
     @ParameterizedTest
-    @ValueSource(strings = [PARTITION_KEY, LOCAL_KEY, VERSION])
+    @ValueSource(strings = [PARTITION_KEY, SORT_KEY, VERSION])
     fun toDocument_nullColumn(column: String) {
         assertThrows<IllegalStateException> {
             RowMapper.toDocument(row(""" {"a":"b"} """, 1, nullColumn = column))
@@ -51,7 +51,7 @@ class RowMapperTests {
     private fun row(body: String?, version: Long, nullColumn: String? = null): Readable = TestRow(
         mapOf(
             PARTITION_KEY to id.partitionKey,
-            LOCAL_KEY to id.localKey,
+            SORT_KEY to id.sortKey,
             VERSION to version,
             BODY to body,
         ) + listOfNotNull(nullColumn).associateWith { null }

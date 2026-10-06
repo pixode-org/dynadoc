@@ -7,7 +7,7 @@ import org.pixode.dynadoc.core.DocumentKey
 
 const val PARTITION_HASH = "partition_hash"
 const val PARTITION_KEY = "partition_key"
-const val LOCAL_KEY = "local_key"
+const val SORT_KEY = "sort_key"
 const val VERSION = "version"
 const val BODY = "body"
 const val DELETED = "deleted"
@@ -15,7 +15,7 @@ const val DELETED = "deleted"
 /**
  * Maps documents to the rows of a TiDB table.
  *
- * A row has the columns `partition_hash`, `partition_key`, `local_key`, `version` and `body`. The body is a JSON
+ * A row has the columns `partition_hash`, `partition_key`, `sort_key`, `version` and `body`. The body is a JSON
  * column, exchanged with the database as text so that the mapping doesn't depend on a specific driver. A deleted
  * document is stored with a null body.
  */
@@ -30,6 +30,6 @@ object RowMapper {
 
     fun toDocumentKey(row: Readable): DocumentKey = DocumentKey(
         partitionKey = checkNotNull(row.get(PARTITION_KEY, String::class.java)),
-        localKey = checkNotNull(row.get(LOCAL_KEY, String::class.java)),
+        sortKey = checkNotNull(row.get(SORT_KEY, String::class.java)),
     )
 }

@@ -13,7 +13,7 @@ Dynadoc translates JSON documents to DynamoDB items by converting top-level keys
 It also adds a few special attributes that don't appear in the JSON, but appear in the `JsonEntity` objects:
 
 - `partition_key`: The partition key of the DynamoDB table. 
-- `sort_key`: The sort key of the DynamoDB table, holding the local key of the document.
+- `sort_key`: The sort key of the document, used as the sort key of the DynamoDB table.
 - `version`: An integer representing the version of the item, for optimistic concurrency management purposes.
 - `deleted`: An attribute set on deleted objects. It contains a value that can be used with the TTL feature of DynamoDB to clear soft-deleted items from the table.
 
@@ -21,7 +21,7 @@ It also adds a few special attributes that don't appear in the JSON, but appear 
 
 With MongoDB, top-level keys of the JSON document become fields of the MongoDB document, and the following reserved fields are added:
 
-- `_id`: An embedded document of the form `{ pk, lk }`, where `pk` holds the partition key and `lk` holds the local key.
+- `_id`: An embedded document of the form `{ pk, sk }`, where `pk` holds the partition key and `sk` holds the sort key.
 - `_version`: An integer representing the version of the document, for optimistic concurrency management purposes.
 - `_deleted`: A date set on deleted documents, used by a TTL index to clear soft-deleted documents from the collection.
 
@@ -31,8 +31,8 @@ These field names cannot be used in document bodies.
 
 With TiKV, each document is stored as a single key-value pair:
 
-- The key is the concatenation of the first 8 bytes of the SHA-256 hash of a configurable namespace, the first 16 bytes of the SHA-256 hash of the partition key, and the local key, strings being encoded in UTF-8. Partitions are spread evenly across the key space of the namespace, while the documents of a partition are stored together and sorted by local key.
-- The value is a UTF-8 encoded JSON object of the form `{ partition_key, local_key, version, body }`, where `partition_key` and `local_key` hold the partition key and local key, `version` the version of the document and `body` the JSON document. Since the body is nested, there are no reserved field names.
+- The key is the concatenation of the first 8 bytes of the SHA-256 hash of a configurable namespace, the first 16 bytes of the SHA-256 hash of the partition key, and the sort key, strings being encoded in UTF-8. Partitions are spread evenly across the key space of the namespace, while the documents of a partition are stored together and sorted by sort key.
+- The value is a UTF-8 encoded JSON object of the form `{ partition_key, sort_key, version, body }`, where `partition_key` and `sort_key` hold the partition key and sort key, `version` the version of the document and `body` the JSON document. Since the body is nested, there are no reserved field names.
 
 Deleted documents are kept with a `null` body so that their version is preserved. TiKV transactions don't support TTLs, so they are never removed automatically.
 
@@ -44,21 +44,21 @@ With TiDB, each document is stored as a row of a table with the following schema
 CREATE TABLE documents (
     partition_hash BIGINT NOT NULL,
     partition_key VARCHAR(255) CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_bin NOT NULL,
-    local_key VARCHAR(255) CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_bin NOT NULL,
+    sort_key VARCHAR(255) CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_bin NOT NULL,
     version BIGINT NOT NULL,
     body JSON,
     deleted TIMESTAMP NULL,
-    PRIMARY KEY (partition_hash, partition_key, local_key) CLUSTERED
+    PRIMARY KEY (partition_hash, partition_key, sort_key) CLUSTERED
 ) TTL = deleted + INTERVAL 0 DAY;
 ```
 
 - `partition_hash` holds the hash of the partition key, as computed by the `CRC32` function of TiDB. It is set by the database when a document is written.
-- `partition_key` and `local_key` hold the partition key and the local key, which are limited to 255 characters. The `utf8mb4_0900_bin` collation sorts keys by their UTF-8 encoding, and doesn't ignore trailing spaces.
+- `partition_key` and `sort_key` hold the partition key and the sort key, which are limited to 255 characters. The `utf8mb4_0900_bin` collation sorts keys by their UTF-8 encoding, and doesn't ignore trailing spaces.
 - `version` is an integer representing the version of the document, for optimistic concurrency management purposes.
 - `body` holds the JSON document. Since the body has its own column, there are no reserved field names.
 - `deleted` is set on deleted documents. It holds the time from which the document can be removed, and is used by the [TTL feature](https://docs.pingcap.com/tidb/stable/time-to-live) of TiDB to clear soft-deleted documents from the table.
 
-The primary key is clustered and starts with the hash of the partition key. Partitions are therefore spread evenly across the regions, even when partition keys are increasing values such as timestamps or sequence numbers. The documents of a partition are stored together and sorted by local key.
+The primary key is clustered and starts with the hash of the partition key. Partitions are therefore spread evenly across the regions, even when partition keys are increasing values such as timestamps or sequence numbers. The documents of a partition are stored together and sorted by sort key.
 
 The `JSON` type of TiDB stores numbers that are not integers as double-precision floating-point numbers, so a number such as `1234567890.0987654321` is read back as `1234567890.0987654`.
 
@@ -72,20 +72,20 @@ With YugabyteDB, each document is stored as a row of a YSQL table with the follo
 CREATE TABLE documents (
     partition_hash INT NOT NULL,
     partition_key TEXT COLLATE "C" NOT NULL,
-    local_key TEXT COLLATE "C" NOT NULL,
+    sort_key TEXT COLLATE "C" NOT NULL,
     version BIGINT NOT NULL,
     body JSONB,
-    PRIMARY KEY (partition_hash ASC, partition_key ASC, local_key ASC),
+    PRIMARY KEY (partition_hash ASC, partition_key ASC, sort_key ASC),
     CHECK (partition_hash = yb_hash_code(partition_key))
 );
 ```
 
 - `partition_hash` holds the hash of the partition key, between 0 and 65535, as computed by the `yb_hash_code` function of YugabyteDB. It is set by the database when a document is written, and checked by a constraint.
-- `partition_key` and `local_key` hold the partition key and the local key. The `C` collation sorts keys by their UTF-8 encoding, regardless of the locale of the database.
+- `partition_key` and `sort_key` hold the partition key and the sort key. The `C` collation sorts keys by their UTF-8 encoding, regardless of the locale of the database.
 - `version` is an integer representing the version of the document, for optimistic concurrency management purposes.
 - `body` holds the JSON document. Since the body has its own column, there are no reserved field names.
 
-The primary key is range-sharded, starting with the hash of the partition key. Partitions are therefore spread evenly across the tablets, even when partition keys are increasing values such as timestamps or sequence numbers. The documents of a partition are stored together and sorted by local key, and since tablets are split on the whole primary key rather than on the hash only, a large partition can be split across several tablets.
+The primary key is range-sharded, starting with the hash of the partition key. Partitions are therefore spread evenly across the tablets, even when partition keys are increasing values such as timestamps or sequence numbers. The documents of a partition are stored together and sorted by sort key, and since tablets are split on the whole primary key rather than on the hash only, a large partition can be split across several tablets.
 
 Deleted documents are kept with a `NULL` body so that their version is preserved. YSQL doesn't support TTLs, so they are never removed automatically.
 
@@ -114,7 +114,7 @@ The `Entity` property can be null if the document does not exist. This can be th
 ```kotlin
 data class DocumentKey(
     val partitionKey: String,
-    val localKey: String,
+    val sortKey: String,
 )
 ```
 
@@ -214,7 +214,7 @@ val product = Product(
 
 val entity: JsonEntity<Product> = createEntity(
     partitionKey = "vanilla-ice-cream",
-    localKey = "product",
+    sortKey = "product",
     entity = product
 )
 ```
@@ -345,12 +345,12 @@ val entityStore = EntityStore(documentStore, DefaultJsonSerializer)
 
 Updating a single document works with any deployment. Updating multiple documents atomically (for example with `EntityStore.transaction`) relies on MongoDB transactions, which require a replica set or a sharded cluster.
 
-`createCollection` creates a [clustered collection](https://www.mongodb.com/docs/manual/core/clustered-collections/), which stores documents ordered by `_id`, so that the documents of a partition are stored together and sorted by local key. An existing collection cannot be converted to a clustered collection.
+`createCollection` creates a [clustered collection](https://www.mongodb.com/docs/manual/core/clustered-collections/), which stores documents ordered by `_id`, so that the documents of a partition are stored together and sorted by sort key. An existing collection cannot be converted to a clustered collection.
 
-By default, `createCollection` also shards the collection, which requires a sharded cluster, using the hashed partition key followed by the local key as the shard key. Pass `sharded = false` to skip this on a replica set. Sharding the collection is equivalent to:
+By default, `createCollection` also shards the collection, which requires a sharded cluster, using the hashed partition key followed by the sort key as the shard key. Pass `sharded = false` to skip this on a replica set. Sharding the collection is equivalent to:
 
 ```javascript
-sh.shardCollection("database.collection", { "_id.pk": "hashed", "_id.lk": 1 })
+sh.shardCollection("database.collection", { "_id.pk": "hashed", "_id.sk": 1 })
 ```
 
 Read concern and read preference are configured on the `MongoClient`.
@@ -360,8 +360,8 @@ Custom queries can be performed using the `find` method:
 ```kotlin
 val result = documentStore.find(
     Filters.and(
-        Filters.gte("_id", BsonDocument("pk", BsonString("products")).append("lk", BsonString("A"))),
-        Filters.lt("_id", BsonDocument("pk", BsonString("products")).append("lk", BsonString("M"))),
+        Filters.gte("_id", BsonDocument("pk", BsonString("products")).append("sk", BsonString("A"))),
+        Filters.lt("_id", BsonDocument("pk", BsonString("products")).append("sk", BsonString("M"))),
         Filters.eq("_id.pk", "products"),
         Filters.gte("price", 100),
         Filters.lte("price", 250),
@@ -373,7 +373,7 @@ val result = documentStore.find(
 val entities: Flow<JsonEntity<Product?>> = result.map(DefaultJsonSerializer::fromDocument)
 ```
 
-To query a range of local keys, the range should be expressed on the whole `_id`, with `pk` before `lk`, rather than on `_id.lk`. This lets MongoDB scan only that range of the clustered collection, and return the documents already sorted by `_id`. A range on `_id.lk` reads every document of the partition instead.
+To query a range of sort keys, the range should be expressed on the whole `_id`, with `pk` before `sk`, rather than on `_id.sk`. This lets MongoDB scan only that range of the clustered collection, and return the documents already sorted by `_id`. A range on `_id.sk` reads every document of the partition instead.
 
 The separate condition on `_id.pk` lets a sharded cluster send the query to a single shard. Without it, a range on `_id` is sent to every shard.
 
@@ -395,10 +395,10 @@ Updates are optimistic transactions: the documents are read at the start timesta
 
 An update that finds one of its documents locked by another update still in progress fails immediately with an `UpdateConflictException`, rather than waiting for the other update to complete. Locks left by updates that were committed, rolled back or have expired are resolved first, so they don't cause a conflict. Under contention, using a `RetryPolicy` with `transaction` retries the update with fresh versions of the documents.
 
-The documents of a partition can be retrieved, sorted by local key, using the `scan` method. The range of local keys is optional, with an inclusive start and an exclusive end:
+The documents of a partition can be retrieved, sorted by sort key, using the `scan` method. The range of sort keys is optional, with an inclusive start and an exclusive end:
 
 ```kotlin
-val result = documentStore.scan("products", startLocalKey = "A", endLocalKey = "M")
+val result = documentStore.scan("products", startSortKey = "A", endSortKey = "M")
 
 val entities: Flow<JsonEntity<Product?>> = result.map(DefaultJsonSerializer::fromDocument)
 ```
@@ -415,7 +415,7 @@ val connectionFactory: ConnectionFactory =
 
 val documentStore = TiDbDocumentStore(connectionFactory, "documents")
 
-// Create the table, clustered by hash of the partition key, partition key then local key
+// Create the table, clustered by hash of the partition key, partition key then sort key
 documentStore.createTable()
 
 val entityStore = EntityStore(documentStore, DefaultJsonSerializer)
@@ -483,10 +483,10 @@ val connectionFactory: ConnectionFactory = ConnectionPool(
 
 ### Queries
 
-The documents of a partition can be retrieved, sorted by local key, using the `scan` method. The range of local keys is optional, with an inclusive start and an exclusive end:
+The documents of a partition can be retrieved, sorted by sort key, using the `scan` method. The range of sort keys is optional, with an inclusive start and an exclusive end:
 
 ```kotlin
-val result = documentStore.scan("products", startLocalKey = "A", endLocalKey = "M")
+val result = documentStore.scan("products", startSortKey = "A", endSortKey = "M")
 
 val entities: Flow<JsonEntity<Product?>> = result.map(DefaultJsonSerializer::fromDocument)
 ```
@@ -498,7 +498,7 @@ val result = documentStore.query(
     """
     partition_hash = CRC32(?) AND partition_key = ?
     AND body->'$.price' BETWEEN ? AND ?
-    ORDER BY local_key
+    ORDER BY sort_key
     """,
     "products",
     "products",
@@ -521,7 +521,7 @@ val connectionFactory: ConnectionFactory =
 
 val documentStore = YugabyteDbDocumentStore(connectionFactory, "documents")
 
-// Create the table, range-sharded by hash of the partition key, partition key then local key,
+// Create the table, range-sharded by hash of the partition key, partition key then sort key,
 // and the function used to update its documents
 documentStore.createTable()
 
@@ -552,10 +552,10 @@ The only case in which an update waits is when another update in progress is cre
 
 ### Queries
 
-The documents of a partition can be retrieved, sorted by local key, using the `scan` method. The range of local keys is optional, with an inclusive start and an exclusive end:
+The documents of a partition can be retrieved, sorted by sort key, using the `scan` method. The range of sort keys is optional, with an inclusive start and an exclusive end:
 
 ```kotlin
-val result = documentStore.scan("products", startLocalKey = "A", endLocalKey = "M")
+val result = documentStore.scan("products", startSortKey = "A", endSortKey = "M")
 
 val entities: Flow<JsonEntity<Product?>> = result.map(DefaultJsonSerializer::fromDocument)
 ```
@@ -567,7 +567,7 @@ val result = documentStore.query(
     """
     partition_hash = yb_hash_code($1::text COLLATE "C") AND partition_key = $1
     AND (body->>'price')::numeric BETWEEN $2 AND $3
-    ORDER BY local_key
+    ORDER BY sort_key
     """,
     "products",
     100,

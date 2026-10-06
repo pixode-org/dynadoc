@@ -36,9 +36,9 @@ private val conflictStates: Set<String> =
  * persistence.
  *
  * Documents are stored in a range-sharded table whose primary key is made of a hash of the partition key, the
- * partition key and the local key, with a `version` column and a JSONB `body` column (see [createTable]). The hash
+ * partition key and the sort key, with a `version` column and a JSONB `body` column (see [createTable]). The hash
  * spreads the partitions evenly across the tablets, while the documents of a partition are stored together, sorted by
- * local key, and can be split across several tablets. Deleted documents are kept with a null body so that their
+ * sort key, and can be split across several tablets. Deleted documents are kept with a null body so that their
  * version is preserved.
  *
  * Documents are updated by a function stored in the database (see [createTable]), so that an update is a single round
@@ -54,7 +54,7 @@ class YugabyteDbDocumentStore(
 
     private val partitionFilter: String = "$PARTITION_HASH = ${hash("$1")} AND $PARTITION_KEY = $1"
 
-    private val selectSql: String = "SELECT $PARTITION_KEY, $LOCAL_KEY, $VERSION, $BODY::text AS $BODY FROM ${table.tableName}"
+    private val selectSql: String = "SELECT $PARTITION_KEY, $SORT_KEY, $VERSION, $BODY::text AS $BODY FROM ${table.tableName}"
     private val updateSql: String = "SELECT ${table.updateFunction}(CAST($1 AS jsonb))"
 
     //region updateDocuments
@@ -138,25 +138,25 @@ class YugabyteDbDocumentStore(
     //region scan and query
 
     /**
-     * Retrieves the documents of a partition, sorted by local key, whose local key is greater than or equal to
-     * [startLocalKey] and lower than [endLocalKey]. When [endLocalKey] is null, all the documents of the partition
-     * starting from [startLocalKey] are returned. Deleted documents are included, with a null body.
+     * Retrieves the documents of a partition, sorted by sort key, whose sort key is greater than or equal to
+     * [startSortKey] and lower than [endSortKey]. When [endSortKey] is null, all the documents of the partition
+     * starting from [startSortKey] are returned. Deleted documents are included, with a null body.
      */
-    fun scan(partitionKey: String, startLocalKey: String = "", endLocalKey: String? = null): Flow<Document> {
-        val range: String = if (endLocalKey == null) "" else " AND $LOCAL_KEY < $3"
+    fun scan(partitionKey: String, startSortKey: String = "", endSortKey: String? = null): Flow<Document> {
+        val range: String = if (endSortKey == null) "" else " AND $SORT_KEY < $3"
 
-        return select("$partitionFilter AND $LOCAL_KEY >= $2$range ORDER BY $LOCAL_KEY") {
-            bind(0, partitionKey).bind(1, startLocalKey)
+        return select("$partitionFilter AND $SORT_KEY >= $2$range ORDER BY $SORT_KEY") {
+            bind(0, partitionKey).bind(1, startSortKey)
 
-            if (endLocalKey != null) {
-                bind(2, endLocalKey)
+            if (endSortKey != null) {
+                bind(2, endSortKey)
             }
         }
     }
 
     /**
      * Finds the documents matching the given condition, which is a SQL expression following the `WHERE` keyword and
-     * referring to the columns `partition_hash`, `partition_key`, `local_key`, `version` and `body`. The values of the
+     * referring to the columns `partition_hash`, `partition_key`, `sort_key`, `version` and `body`. The values of the
      * parameters `$1`, `$2`, etc. are given by [values], in that order.
      *
      * The documents of a partition are read directly when the condition specifies both the hash of the partition key
@@ -183,9 +183,9 @@ class YugabyteDbDocumentStore(
     //region createTable
 
     /**
-     * Creates the table, range-sharded by hash of the partition key, then partition key, then local key, so that the
+     * Creates the table, range-sharded by hash of the partition key, then partition key, then sort key, so that the
      * partitions are spread evenly across the tablets, and the documents of a partition are stored together and
-     * sorted by local key.
+     * sorted by sort key.
      *
      * The function used to update the documents of the table is created along with the table, or replaced if it
      * already exists. It has the name of the table followed by `_update`.
@@ -222,7 +222,7 @@ class YugabyteDbDocumentStore(
 
     private fun Statement.bindKeys(ids: List<DocumentKey>): Statement {
         ids.forEachIndexed { index, id ->
-            bind(index * 2, id.partitionKey).bind(index * 2 + 1, id.localKey)
+            bind(index * 2, id.partitionKey).bind(index * 2 + 1, id.sortKey)
         }
 
         return this
@@ -233,10 +233,10 @@ class YugabyteDbDocumentStore(
     private fun selectKeysSql(count: Int): String =
         (0 until count).joinToString(" UNION ALL ") { i ->
             val partitionKey = "$${i * 2 + 1}"
-            val localKey = "$${i * 2 + 2}"
+            val sortKey = "$${i * 2 + 2}"
 
             "$selectSql WHERE $PARTITION_HASH = ${hash(partitionKey)} " +
-                "AND $PARTITION_KEY = $partitionKey AND $LOCAL_KEY = $localKey"
+                "AND $PARTITION_KEY = $partitionKey AND $SORT_KEY = $sortKey"
         }
 
     // The hash used by YugabyteDB for hash sharding, which is evenly distributed between 0 and HASH_COUNT - 1

@@ -278,7 +278,7 @@ class DynamoDbDocumentStoreTests {
     @Test
     fun updateDocuments_trailingSpace() = runBlocking {
         // Keys that only differ by a trailing space identify different documents
-        val otherId = DocumentKey("${ids[0].partitionKey} ", "${ids[0].localKey} ")
+        val otherId = DocumentKey("${ids[0].partitionKey} ", "${ids[0].sortKey} ")
         updateDocument(ids[0], JSON_1, 0)
         updateDocument(otherId, JSON_2, 0)
 

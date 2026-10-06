@@ -445,7 +445,7 @@ class MongoDbDocumentStoreTests {
     //region find
 
     @Test
-    fun find_filterLocalKey() = runBlocking {
+    fun find_filterSortKey() = runBlocking {
         val documents = (0..9).map { i ->
             parseDocument(DocumentKey(partitionKey, "ABC0$i"), """ {"a":$i} """, 0)
         }
@@ -454,11 +454,11 @@ class MongoDbDocumentStoreTests {
         val result = store.find(
             Filters.and(
                 Filters.eq("$ID.$PARTITION_KEY", partitionKey),
-                Filters.gte("$ID.$LOCAL_KEY", "ABC03"),
-                Filters.lte("$ID.$LOCAL_KEY", "ABC05"),
+                Filters.gte("$ID.$SORT_KEY", "ABC03"),
+                Filters.lte("$ID.$SORT_KEY", "ABC05"),
             ),
         ) {
-            sort(Sorts.ascending("$ID.$LOCAL_KEY"))
+            sort(Sorts.ascending("$ID.$SORT_KEY"))
         }
 
         assertDocuments(result.toList(), documents.slice(3..5))
@@ -477,7 +477,7 @@ class MongoDbDocumentStoreTests {
                 Filters.gt("a", 4),
             ),
         ) {
-            sort(Sorts.ascending("$ID.$LOCAL_KEY"))
+            sort(Sorts.ascending("$ID.$SORT_KEY"))
         }
 
         assertDocuments(result.toList(), documents.slice(5..9))
@@ -515,11 +515,11 @@ class MongoDbDocumentStoreTests {
         val result = store.find(
             Filters.and(
                 Filters.eq("$ID.$PARTITION_KEY", partitionKey),
-                Filters.gte("$ID.$LOCAL_KEY", "ABC0120"),
-                Filters.lte("$ID.$LOCAL_KEY", "ABC0180"),
+                Filters.gte("$ID.$SORT_KEY", "ABC0120"),
+                Filters.lte("$ID.$SORT_KEY", "ABC0180"),
             ),
         ) {
-            sort(Sorts.ascending("$ID.$LOCAL_KEY"))
+            sort(Sorts.ascending("$ID.$SORT_KEY"))
             batchSize(7)
         }
 

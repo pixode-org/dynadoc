@@ -15,12 +15,12 @@ class KeyMapperTests {
 
     @Test
     fun fromDocumentKey_layout() {
-        val key: ByteArray = keyMapper.fromDocumentKey(DocumentKey("partition", "local"))
+        val key: ByteArray = keyMapper.fromDocumentKey(DocumentKey("partition", "sort"))
 
         val expected: ByteArray =
             sha256("namespace").copyOf(8) +
             sha256("partition").copyOf(16) +
-            "local".toByteArray()
+            "sort".toByteArray()
 
         assertArrayEquals(expected, key)
     }
