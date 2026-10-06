@@ -56,6 +56,8 @@ class TiDbDocumentStoreTests {
 
     //region updateDocuments
 
+    //region updateDocuments: Single document
+
     @ParameterizedTest
     @MethodSource("$PREFIX#updateDocuments_oneArgument")
     fun updateDocuments_emptyToValue(to: String?) = runBlocking {
@@ -126,6 +128,8 @@ class TiDbDocumentStoreTests {
         )
     }
 
+    //endregion
+
     //region updateDocuments: Multiple documents
 
     @Test
@@ -169,20 +173,6 @@ class TiDbDocumentStoreTests {
 
         assertDocument(document1, ids[0], null, 2)
         assertDocument(document2, ids[1], null, 1)
-    }
-
-    @Test
-    fun updateDocuments_multipleDocumentsUpdatedAndChecked() = runBlocking {
-        updateDocument(ids[0], JSON_1, 0)
-
-        store.updateDocuments(
-            updatedDocuments = listOf(parseDocument(ids[0], JSON_2, 1)),
-            checkedDocuments = listOf(parseDocument(ids[0], JSON_3, 1)),
-        )
-
-        val document = store.getDocument(ids[0])
-
-        assertDocument(document, ids[0], JSON_2, 2)
     }
 
     //endregion
@@ -271,23 +261,35 @@ class TiDbDocumentStoreTests {
         assertDocument(document2, ids[1], null, 0)
     }
 
-    @Test
-    fun updateDocuments_multipleDocumentsSameDocument() = runBlocking {
-        // The conflict is detected by the database, which rejects the second row, rather than by the script
-        val exception = assertThrows<UpdateConflictException> {
-            store.updateDocuments(
-                parseDocument(ids[0], JSON_1, 0),
-                parseDocument(ids[1], JSON_2, 0),
-                parseDocument(ids[1], JSON_3, 0),
-            )
+    @ParameterizedTest
+    @ValueSource(strings = ["updatedTwice", "checkedTwice", "updatedAndChecked"])
+    fun updateDocuments_duplicateDocument(mode: String) = runBlocking {
+        updateDocument(ids[0], JSON_1, 0)
+
+        // The versions are correct, the update is rejected because a document is included more than once
+        assertThrows<IllegalArgumentException> {
+            when (mode) {
+                "updatedTwice" -> store.updateDocuments(
+                    parseDocument(ids[1], JSON_2, 0),
+                    parseDocument(ids[0], JSON_3, 1),
+                    parseDocument(ids[0], JSON_4, 1),
+                )
+                "checkedTwice" -> store.updateDocuments(
+                    updatedDocuments = listOf(parseDocument(ids[1], JSON_2, 0)),
+                    checkedDocuments = listOf(parseDocument(ids[0], JSON_3, 1), parseDocument(ids[0], JSON_4, 1)),
+                )
+                else -> store.updateDocuments(
+                    updatedDocuments = listOf(parseDocument(ids[1], JSON_2, 0), parseDocument(ids[0], JSON_3, 1)),
+                    checkedDocuments = listOf(parseDocument(ids[0], JSON_4, 1)),
+                )
+            }
         }
 
         val document1 = store.getDocument(ids[0])
         val document2 = store.getDocument(ids[1])
 
-        assertDocument(document1, ids[0], null, 0)
+        assertDocument(document1, ids[0], JSON_1, 1)
         assertDocument(document2, ids[1], null, 0)
-        assertEquals(ids[0], exception.id)
     }
 
     @Test
@@ -317,7 +319,7 @@ class TiDbDocumentStoreTests {
 
     //endregion
 
-    // region updateDocuments: Conflict (Single document)
+    //region updateDocuments: Conflict (Single document)
 
     @ParameterizedTest
     @ValueSource(booleans = [true, false])
@@ -394,9 +396,7 @@ class TiDbDocumentStoreTests {
     //region updateDocuments: Conflict (Multiple documents)
 
     @ParameterizedTest
-    @ValueSource(
-        strings = ["updatedDoesNotExist", "checkedDoesNotExist", "checkedAlreadyExists", "updatedAndCheckedMismatch"],
-    )
+    @ValueSource(strings = ["updatedDoesNotExist", "checkedDoesNotExist", "checkedAlreadyExists"])
     fun updateDocuments_multipleDocumentsConflict(mode: String) = runBlocking {
         updateDocument(ids[0], JSON_1, 0)
 
@@ -411,14 +411,9 @@ class TiDbDocumentStoreTests {
                     checkedDocuments = listOf(parseDocument(ids[1], JSON_3, 10)),
                 )
                 // The checked document is expected to be missing, the conflict is not on the first document
-                "checkedAlreadyExists" -> store.updateDocuments(
+                else -> store.updateDocuments(
                     updatedDocuments = listOf(parseDocument(ids[1], JSON_2, 0)),
                     checkedDocuments = listOf(parseDocument(ids[0], JSON_3, 0)),
-                )
-                // The same document is updated and checked with different versions
-                else -> store.updateDocuments(
-                    updatedDocuments = listOf(parseDocument(ids[0], JSON_2, 1)),
-                    checkedDocuments = listOf(parseDocument(ids[0], JSON_3, 2)),
                 )
             }
         }

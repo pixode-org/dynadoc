@@ -48,6 +48,8 @@ class DynamoDbDocumentStoreTests {
 
     //region updateDocuments
 
+    //region updateDocuments: Single document
+
     @ParameterizedTest
     @MethodSource("$PREFIX#updateDocuments_oneArgument")
     fun updateDocuments_emptyToValue(to: String?) = runBlocking {
@@ -118,6 +120,57 @@ class DynamoDbDocumentStoreTests {
         )
     }
 
+    //endregion
+
+    //region updateDocuments: Multiple documents
+
+    @Test
+    fun updateDocuments_multipleDocumentsSuccess() = runBlocking {
+        updateDocument(ids[0], JSON_1, 0)
+        updateDocument(ids[1], JSON_2, 0)
+
+        store.updateDocuments(
+            updatedDocuments = listOf(
+                parseDocument(ids[0], JSON_3, 1),
+                parseDocument(ids[2], JSON_4, 0),
+            ),
+            checkedDocuments = listOf(
+                parseDocument(ids[1], JSON_5, 1),
+                parseDocument(ids[3], JSON_6, 0),
+            ),
+        )
+
+        val document1 = store.getDocument(ids[0])
+        val document2 = store.getDocument(ids[1])
+        val document3 = store.getDocument(ids[2])
+        val document4 = store.getDocument(ids[3])
+
+        assertDocument(document1, ids[0], JSON_3, 2)
+        assertDocument(document2, ids[1], JSON_2, 1)
+        assertDocument(document3, ids[2], JSON_4, 1)
+        assertDocument(document4, ids[3], null, 0)
+    }
+
+    @Test
+    fun updateDocuments_multipleDocumentsDeleted() = runBlocking {
+        updateDocument(ids[0], JSON_1, 0)
+
+        store.updateDocuments(
+            parseDocument(ids[0], null, 1),
+            parseDocument(ids[1], null, 0),
+        )
+
+        val document1 = store.getDocument(ids[0])
+        val document2 = store.getDocument(ids[1])
+
+        assertDocument(document1, ids[0], null, 2)
+        assertDocument(document2, ids[1], null, 1)
+    }
+
+    //endregion
+
+    //region updateDocuments: Special cases
+
     @ParameterizedTest
     @ValueSource(
         strings = [
@@ -143,6 +196,113 @@ class DynamoDbDocumentStoreTests {
 
         assertDocument(document, ids[0], null, 0)
     }
+
+    @Test
+    fun updateDocuments_singleDocumentDynamoDbError() = runBlocking {
+        assertThrows<DynamoDbException> {
+            updateDocument(JSON_1MB, 0)
+        }
+
+        val document = store.getDocument(ids[0])
+
+        assertDocument(document, ids[0], null, 0)
+    }
+
+    @Test
+    fun updateDocuments_multipleDocumentsDynamoDbError() = runBlocking {
+        updateDocument(ids[0], JSON_1, 0)
+
+        assertThrows<DynamoDbException> {
+            store.updateDocuments(
+                parseDocument(ids[0], JSON_2, 1),
+                parseDocument(ids[1], JSON_1MB, 0),
+            )
+        }
+
+        val document1 = store.getDocument(ids[0])
+        val document2 = store.getDocument(ids[1])
+
+        assertDocument(document1, ids[0], JSON_1, 1)
+        assertDocument(document2, ids[1], null, 0)
+    }
+
+    @Test
+    fun updateDocuments_multipleDocumentsInvalidJson() = runBlocking {
+        updateDocument(ids[0], JSON_1, 0)
+
+        assertThrows<IllegalArgumentException> {
+            store.updateDocuments(
+                parseDocument(ids[0], JSON_2, 1),
+                parseDocument(ids[1], """ ["a"] """, 0),
+            )
+        }
+
+        val document1 = store.getDocument(ids[0])
+        val document2 = store.getDocument(ids[1])
+
+        assertDocument(document1, ids[0], JSON_1, 1)
+        assertDocument(document2, ids[1], null, 0)
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = ["updatedTwice", "checkedTwice", "updatedAndChecked"])
+    fun updateDocuments_duplicateDocument(mode: String) = runBlocking {
+        updateDocument(ids[0], JSON_1, 0)
+
+        // The versions are correct, the update is rejected because a document is included more than once
+        assertThrows<IllegalArgumentException> {
+            when (mode) {
+                "updatedTwice" -> store.updateDocuments(
+                    parseDocument(ids[1], JSON_2, 0),
+                    parseDocument(ids[0], JSON_3, 1),
+                    parseDocument(ids[0], JSON_4, 1),
+                )
+                "checkedTwice" -> store.updateDocuments(
+                    updatedDocuments = listOf(parseDocument(ids[1], JSON_2, 0)),
+                    checkedDocuments = listOf(parseDocument(ids[0], JSON_3, 1), parseDocument(ids[0], JSON_4, 1)),
+                )
+                else -> store.updateDocuments(
+                    updatedDocuments = listOf(parseDocument(ids[1], JSON_2, 0), parseDocument(ids[0], JSON_3, 1)),
+                    checkedDocuments = listOf(parseDocument(ids[0], JSON_4, 1)),
+                )
+            }
+        }
+
+        val document1 = store.getDocument(ids[0])
+        val document2 = store.getDocument(ids[1])
+
+        assertDocument(document1, ids[0], JSON_1, 1)
+        assertDocument(document2, ids[1], null, 0)
+    }
+
+    @Test
+    fun updateDocuments_trailingSpace() = runBlocking {
+        // Keys that only differ by a trailing space identify different documents
+        val otherId = DocumentKey("${ids[0].partitionKey} ", "${ids[0].localKey} ")
+        updateDocument(ids[0], JSON_1, 0)
+        updateDocument(otherId, JSON_2, 0)
+
+        val documents: List<Document> = store.getDocuments(listOf(ids[0], otherId)).toList()
+
+        assertDocument(documents[0], ids[0], JSON_1, 1)
+        assertDocument(documents[1], otherId, JSON_2, 1)
+    }
+
+    @Test
+    fun updateDocuments_specialCharacters() = runBlocking {
+        val specialId = DocumentKey("$partitionKey \"'\\ é😀", "\"'\\ é😀")
+        val json = """ {"a \"'\\ é":"b \"'\\ é\n"} """
+        updateDocument(specialId, json, 0)
+        updateDocument(specialId, json, 1)
+
+        val document = store.getDocument(specialId)
+
+        assertDocument(document, specialId, json, 2)
+    }
+
+    //endregion
+
+    //region updateDocuments: Conflict (Single document)
 
     @ParameterizedTest
     @ValueSource(booleans = [true, false])
@@ -200,58 +360,43 @@ class DynamoDbDocumentStoreTests {
     }
 
     @Test
-    fun updateDocuments_singleDocumentDynamoDbError() = runBlocking {
-        assertThrows<DynamoDbException> {
-            updateDocument(JSON_1MB, 0)
+    fun updateDocuments_conflictDeletedDocument() = runBlocking {
+        updateDocument(JSON_1, 0)
+        updateDocument(null, 1)
+
+        val exception = assertThrows<UpdateConflictException> {
+            updateDocument(JSON_2, 0)
         }
 
         val document = store.getDocument(ids[0])
 
-        assertDocument(document, ids[0], null, 0)
+        assertDocument(document, ids[0], null, 2)
+        assertEquals(ids[0], exception.id)
     }
 
-    @Test
-    fun updateDocuments_multipleDocumentsSuccess() = runBlocking {
-        updateDocument(ids[0], JSON_1, 0)
-        updateDocument(ids[1], JSON_2, 0)
+    //endregion
 
-        store.updateDocuments(
-            updatedDocuments = listOf(
-                parseDocument(ids[0], JSON_3, 1),
-                parseDocument(ids[2], JSON_4, 0),
-            ),
-            checkedDocuments = listOf(
-                parseDocument(ids[1], JSON_5, 1),
-                parseDocument(ids[3], JSON_6, 0),
-            ),
-        )
-
-        val document1 = store.getDocument(ids[0])
-        val document2 = store.getDocument(ids[1])
-        val document3 = store.getDocument(ids[2])
-        val document4 = store.getDocument(ids[3])
-
-        assertDocument(document1, ids[0], JSON_3, 2)
-        assertDocument(document2, ids[1], JSON_2, 1)
-        assertDocument(document3, ids[2], JSON_4, 1)
-        assertDocument(document4, ids[3], null, 0)
-    }
+    //region updateDocuments: Conflict (Multiple documents)
 
     @ParameterizedTest
-    @ValueSource(booleans = [true, false])
-    fun updateDocuments_multipleDocumentsConflict(checkOnly: Boolean) = runBlocking {
+    @ValueSource(strings = ["updatedDoesNotExist", "checkedDoesNotExist", "checkedAlreadyExists"])
+    fun updateDocuments_multipleDocumentsConflict(mode: String) = runBlocking {
         updateDocument(ids[0], JSON_1, 0)
 
         val exception = assertThrows<UpdateConflictException> {
-            if (checkOnly) {
-                store.updateDocuments(
+            when (mode) {
+                "updatedDoesNotExist" -> store.updateDocuments(
+                    parseDocument(ids[0], JSON_2, 1),
+                    parseDocument(ids[1], JSON_3, 10),
+                )
+                "checkedDoesNotExist" -> store.updateDocuments(
                     updatedDocuments = listOf(parseDocument(ids[0], JSON_2, 1)),
                     checkedDocuments = listOf(parseDocument(ids[1], JSON_3, 10)),
                 )
-            } else {
-                store.updateDocuments(
-                    parseDocument(ids[0], JSON_2, 1),
-                    parseDocument(ids[1], JSON_3, 10),
+                // The checked document is expected to be missing, the conflict is not on the first document
+                else -> store.updateDocuments(
+                    updatedDocuments = listOf(parseDocument(ids[1], JSON_2, 0)),
+                    checkedDocuments = listOf(parseDocument(ids[0], JSON_3, 0)),
                 )
             }
         }
@@ -261,26 +406,10 @@ class DynamoDbDocumentStoreTests {
 
         assertDocument(document1, ids[0], JSON_1, 1)
         assertDocument(document2, ids[1], null, 0)
-        assertEquals(ids[1], exception.id)
+        assertEquals(if (mode.endsWith("DoesNotExist")) ids[1] else ids[0], exception.id)
     }
 
-    @Test
-    fun updateDocuments_multipleDocumentsDynamoDbError() = runBlocking {
-        updateDocument(ids[0], JSON_1, 0)
-
-        assertThrows<DynamoDbException> {
-            store.updateDocuments(
-                parseDocument(ids[0], JSON_2, 1),
-                parseDocument(ids[1], JSON_1MB, 0),
-            )
-        }
-
-        val document1 = store.getDocument(ids[0])
-        val document2 = store.getDocument(ids[1])
-
-        assertDocument(document1, ids[0], JSON_1, 1)
-        assertDocument(document2, ids[1], null, 0)
-    }
+    //endregion
 
     //endregion
 
@@ -436,7 +565,27 @@ class DynamoDbDocumentStoreTests {
         assertDocuments(result.sortedBy { it.id.partitionKey }, documents.slice(20..80))
     }
 
-    //endregion MethodSources
+    //endregion
+
+    //region createTable
+
+    @Test
+    fun createTable_qualifiedName() = runBlocking {
+        val otherStore = DynamoDbDocumentStore(client, "tests.other")
+
+        otherStore.createTable()
+        otherStore.updateDocuments(parseDocument(ids[0], JSON_1, 0))
+
+        val document = otherStore.getDocument(ids[0])
+        val otherDocument = store.getDocument(ids[0])
+
+        assertDocument(document, ids[0], JSON_1, 1)
+        assertDocument(otherDocument, ids[0], null, 0)
+    }
+
+    //endregion
+
+    //region MethodSources
 
     object MethodSources {
         const val PREFIX: String = $$"org.pixode.dynadoc.dynamodb.DynamoDbDocumentStoreTests$MethodSources"

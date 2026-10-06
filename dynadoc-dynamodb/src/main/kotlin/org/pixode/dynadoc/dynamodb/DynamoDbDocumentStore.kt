@@ -50,9 +50,14 @@ class DynamoDbDocumentStore(
     override suspend fun updateDocuments(updatedDocuments: Iterable<Document>, checkedDocuments: Iterable<Document>) {
         val updatedList: List<Document> = updatedDocuments.toList()
         val checkedList: List<Document> = checkedDocuments.toList()
+        val documents: List<Document> = updatedList + checkedList
+
+        require(documents.distinctBy { it.id }.size == documents.size) {
+            "A document can only be updated or checked once"
+        }
 
         when {
-            updatedList.isEmpty() && checkedList.isEmpty() -> {}
+            documents.isEmpty() -> {}
             updatedList.size == 1 && checkedList.isEmpty() -> updateSingleDocument(updatedList[0])
             else -> updateMultipleDocuments(updatedList, checkedList)
         }

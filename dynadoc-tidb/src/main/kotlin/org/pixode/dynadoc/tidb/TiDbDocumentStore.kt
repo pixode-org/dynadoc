@@ -72,20 +72,12 @@ class TiDbDocumentStore(
 
     override suspend fun updateDocuments(updatedDocuments: Iterable<Document>, checkedDocuments: Iterable<Document>) {
         val updatedList: List<Document> = updatedDocuments.toList()
-        val updatedVersions: Map<DocumentKey, Long> = updatedList.associate { it.id to it.version }
-
-        // A document that is both updated and checked is only processed once
-        val checkedList: List<Document> = checkedDocuments.filter { document ->
-            val updatedVersion: Long? = updatedVersions[document.id]
-
-            if (updatedVersion != null && updatedVersion != document.version) {
-                throw UpdateConflictException(document.id)
-            }
-
-            updatedVersion == null
-        }
-
+        val checkedList: List<Document> = checkedDocuments.toList()
         val documents: List<Document> = updatedList + checkedList
+
+        require(documents.distinctBy { it.id }.size == documents.size) {
+            "A document can only be updated or checked once"
+        }
 
         when {
             documents.isEmpty() -> {}
