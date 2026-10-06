@@ -5,17 +5,17 @@ import io.asyncer.r2dbc.mysql.MySqlConnectionFactory
 import io.r2dbc.spi.Connection
 import io.r2dbc.spi.ConnectionFactory
 import io.r2dbc.spi.R2dbcException
+import io.r2dbc.spi.Result
 import io.r2dbc.spi.Statement
 import java.util.UUID
 import java.util.concurrent.TimeUnit
 import java.util.stream.Stream
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.async
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.toList
 import kotlinx.coroutines.reactive.asFlow
 import kotlinx.coroutines.reactive.awaitFirstOrNull
 import kotlinx.coroutines.reactive.awaitSingle
+import kotlinx.coroutines.reactive.publish
 import kotlinx.coroutines.runBlocking
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.BeforeAll
@@ -33,9 +33,11 @@ import org.pixode.dynadoc.core.getDocument
 import org.pixode.dynadoc.core.parseDocument
 import org.pixode.dynadoc.core.updateDocuments
 import org.pixode.dynadoc.tidb.TiDbDocumentStoreTests.MethodSources.PREFIX
-import org.testcontainers.tidb.TiDBContainer
+import org.reactivestreams.Publisher
 import org.testcontainers.junit.jupiter.Container
 import org.testcontainers.junit.jupiter.Testcontainers
+import org.testcontainers.tidb.TiDBContainer
+import reactor.core.publisher.Flux
 
 private const val JSON_1 = """ {"abc":"def"} """
 private const val JSON_2 = """ {"ghi":"jkl"} """
@@ -275,10 +277,12 @@ class TiDbDocumentStoreTests {
                     parseDocument(ids[0], JSON_3, 1),
                     parseDocument(ids[0], JSON_4, 1),
                 )
+
                 "checkedTwice" -> store.updateDocuments(
                     updatedDocuments = listOf(parseDocument(ids[1], JSON_2, 0)),
                     checkedDocuments = listOf(parseDocument(ids[0], JSON_3, 1), parseDocument(ids[0], JSON_4, 1)),
                 )
+
                 else -> store.updateDocuments(
                     updatedDocuments = listOf(parseDocument(ids[1], JSON_2, 0), parseDocument(ids[0], JSON_3, 1)),
                     checkedDocuments = listOf(parseDocument(ids[0], JSON_4, 1)),
@@ -407,6 +411,7 @@ class TiDbDocumentStoreTests {
                     parseDocument(ids[0], JSON_2, 1),
                     parseDocument(ids[1], JSON_3, 10),
                 )
+
                 "checkedDoesNotExist" -> store.updateDocuments(
                     updatedDocuments = listOf(parseDocument(ids[0], JSON_2, 1)),
                     checkedDocuments = listOf(parseDocument(ids[1], JSON_3, 10)),
@@ -446,6 +451,7 @@ class TiDbDocumentStoreTests {
                     parseDocument(ids[0], JSON_4, 1),
                     parseDocument(ids[1], JSON_5, 1),
                 )
+
                 else -> store.updateDocuments(
                     updatedDocuments = listOf(parseDocument(ids[0], JSON_4, 1)),
                     checkedDocuments = listOf(parseDocument(ids[1], JSON_5, 1)),
@@ -473,6 +479,7 @@ class TiDbDocumentStoreTests {
                     parseDocument(ids[0], JSON_2, 0),
                     parseDocument(ids[1], JSON_3, 0),
                 )
+
                 else -> store.updateDocuments(
                     updatedDocuments = listOf(parseDocument(ids[0], JSON_2, 0)),
                     checkedDocuments = listOf(parseDocument(ids[1], JSON_3, 0)),
@@ -486,6 +493,49 @@ class TiDbDocumentStoreTests {
         assertEquals(if (mode == "check") null else WRITE_CONFLICT, exception?.errorCode)
         assertDocument(document1, ids[0], if (mode == "single") null else JSON_2, if (mode == "single") 0 else 1)
         assertDocument(document2, ids[1], if (mode == "check") JSON_1 else JSON_3, 1)
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = ["update", "insert", "check", "checkMissing"])
+    fun updateDocuments_concurrentCommit(mode: String) = runBlocking {
+        val exists: Boolean = mode == "update" || mode == "check"
+        val version: Long = if (exists) 1 else 0
+
+        updateDocument(ids[0], JSON_1, 0)
+        if (exists) {
+            updateDocument(ids[1], JSON_2, 0)
+        }
+
+        // The second document is written by a concurrent transaction after it has been read by the update, but before
+        // the update is committed, so the update can't be committed
+        val concurrentStore = TiDbDocumentStore(
+            connectionFactory = connectionFactory.beforeCommit {
+                updateDocument(ids[1], JSON_3, version)
+            },
+            tableName = TABLE,
+        )
+
+        val exception: UpdateConflictException = assertThrows {
+            when (mode) {
+                "update", "insert" -> concurrentStore.updateDocuments(
+                    parseDocument(ids[0], JSON_4, 1),
+                    parseDocument(ids[1], JSON_5, version),
+                )
+
+                else -> concurrentStore.updateDocuments(
+                    updatedDocuments = listOf(parseDocument(ids[0], JSON_4, 1)),
+                    checkedDocuments = listOf(parseDocument(ids[1], JSON_5, version)),
+                )
+            }
+        }
+
+        val document1 = store.getDocument(ids[0])
+        val document2 = store.getDocument(ids[1])
+
+        // The database doesn't indicate which document caused the conflict
+        assertEquals(ids[0], exception.id)
+        assertDocument(document1, ids[0], JSON_1, 1)
+        assertDocument(document2, ids[1], JSON_3, version + 1)
     }
 
     //endregion
@@ -503,8 +553,8 @@ class TiDbDocumentStoreTests {
             connection
                 .createStatement(
                     "INSERT INTO $TABLE ($PARTITION_HASH, $PARTITION_KEY, $LOCAL_KEY, $VERSION, $BODY) " +
-                        "VALUES (CRC32(?), ?, ?, ?, ?) " +
-                        "ON DUPLICATE KEY UPDATE $VERSION = VALUES($VERSION), $BODY = VALUES($BODY)"
+                    "VALUES (CRC32(?), ?, ?, ?, ?) " +
+                    "ON DUPLICATE KEY UPDATE $VERSION = VALUES($VERSION), $BODY = VALUES($BODY)",
                 )
                 .bind(0, document.id.partitionKey)
                 .bind(1, document.id.partitionKey)
@@ -526,6 +576,35 @@ class TiDbDocumentStoreTests {
             }
         } finally {
             connection.close().awaitFirstOrNull()
+        }
+    }
+
+    /**
+     * Returns a connection factory whose connections execute [action] right before they commit a transaction.
+     */
+    private fun ConnectionFactory.beforeCommit(action: suspend () -> Unit): ConnectionFactory {
+        val factory: ConnectionFactory = this
+
+        return object : ConnectionFactory by factory {
+            override fun create(): Publisher<out Connection> =
+                Flux.from(factory.create()).map { connection ->
+                    object : Connection by connection {
+                        override fun createStatement(sql: String): Statement {
+                            val statement: Statement = connection.createStatement(sql)
+
+                            // Only this statement has no parameter, so it is not replaced by another statement when
+                            // its parameters are bound
+                            return if (sql == "COMMIT") {
+                                object : Statement by statement {
+                                    override fun execute(): Publisher<out Result> =
+                                        Flux.from(publish<Any> { action() }).thenMany(Flux.from(statement.execute()))
+                                }
+                            } else {
+                                statement
+                            }
+                        }
+                    }
+                }
         }
     }
 
@@ -846,7 +925,7 @@ class TiDbDocumentStoreTests {
                     .useServerPrepareStatement()
                     // TiDB only caches the plans of the statements reading or writing several keys with this setting
                     .sessionVariables("tidb_opt_fix_control='44830:ON'")
-                    .build()
+                    .build(),
             )
 
             runBlocking {
