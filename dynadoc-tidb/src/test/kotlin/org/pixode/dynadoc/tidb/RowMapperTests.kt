@@ -4,6 +4,7 @@ import io.r2dbc.spi.Readable
 import kotlinx.serialization.json.Json
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Test
+import org.junit.jupiter.api.assertThrows
 import org.junit.jupiter.params.ParameterizedTest
 import org.junit.jupiter.params.provider.ValueSource
 import org.pixode.dynadoc.core.DocumentKey
@@ -39,13 +40,21 @@ class RowMapperTests {
         assertEquals(id, RowMapper.toDocumentKey(row(null, 3)))
     }
 
-    private fun row(body: String?, version: Long): Readable = TestRow(
+    @ParameterizedTest
+    @ValueSource(strings = [PARTITION_KEY, LOCAL_KEY, VERSION])
+    fun toDocument_nullColumn(column: String) {
+        assertThrows<IllegalStateException> {
+            RowMapper.toDocument(row(""" {"a":"b"} """, 1, nullColumn = column))
+        }
+    }
+
+    private fun row(body: String?, version: Long, nullColumn: String? = null): Readable = TestRow(
         mapOf(
             PARTITION_KEY to id.partitionKey,
             LOCAL_KEY to id.localKey,
             VERSION to version,
             BODY to body,
-        )
+        ) + listOfNotNull(nullColumn).associateWith { null }
     )
 
     private class TestRow(private val values: Map<String, Any?>) : Readable {

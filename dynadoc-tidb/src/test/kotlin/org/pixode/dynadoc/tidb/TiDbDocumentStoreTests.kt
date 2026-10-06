@@ -456,6 +456,43 @@ class TiDbDocumentStoreTests {
     }
 
     @Test
+    fun updateDocuments_multipleDocumentsInvalidJson() = runBlocking {
+        updateDocument(ids[0], JSON_1, 0)
+
+        assertThrows<IllegalArgumentException> {
+            store.updateDocuments(
+                parseDocument(ids[0], JSON_2, 1),
+                parseDocument(ids[1], """ ["a"] """, 0),
+            )
+        }
+
+        val document1 = store.getDocument(ids[0])
+        val document2 = store.getDocument(ids[1])
+
+        assertDocument(document1, ids[0], JSON_1, 1)
+        assertDocument(document2, ids[1], null, 0)
+    }
+
+    @Test
+    fun updateDocuments_multipleDocumentsSameDocument() = runBlocking {
+        // The conflict is detected by the database, which rejects the second row, rather than by the script
+        val exception = assertThrows<UpdateConflictException> {
+            store.updateDocuments(
+                parseDocument(ids[0], JSON_1, 0),
+                parseDocument(ids[1], JSON_2, 0),
+                parseDocument(ids[1], JSON_3, 0),
+            )
+        }
+
+        val document1 = store.getDocument(ids[0])
+        val document2 = store.getDocument(ids[1])
+
+        assertDocument(document1, ids[0], null, 0)
+        assertDocument(document2, ids[1], null, 0)
+        assertEquals(ids[0], exception.id)
+    }
+
+    @Test
     fun updateDocuments_trailingSpace() = runBlocking {
         // Keys that only differ by a trailing space identify different documents
         val otherId = DocumentKey("${ids[0].partitionKey} ", "${ids[0].localKey} ")

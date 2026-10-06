@@ -6,7 +6,8 @@ const val MAX_KEY_LENGTH = 255
 
 class TiDbTable(table: String) {
     val tableName: String
-    val updateTableName: String
+
+    private val updateTableName: String
 
     init {
         val tableNameParts: List<String> = table.split('.')
