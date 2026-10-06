@@ -104,14 +104,14 @@ class TiDbDocumentStore(
                 withConnection { connection ->
                     val statement: Statement =
                         if (document.version == 0L) {
-                            connection.createStatement(table.insertSql())
+                            connection.createStatement(table.insertSql)
                                 .bind(0, document.id.partitionKey)
                                 .bind(1, document.id.partitionKey)
                                 .bind(2, document.id.localKey)
                                 .bindNullable(3, body, String::class.java)
                                 .bindNullable(4, deleted, Long::class.javaObjectType)
                         } else {
-                            connection.createStatement(table.updateSql())
+                            connection.createStatement(table.updateSql)
                                 .bindNullable(0, body, String::class.java)
                                 .bindNullable(1, deleted, Long::class.javaObjectType)
                                 .bind(2, document.id.partitionKey)
@@ -194,7 +194,6 @@ class TiDbDocumentStore(
 
     private fun fromBody(body: JsonElement?): String? {
         require(body == null || body is JsonObject) { "The document must be a valid JSON object" }
-
         return body?.toString()
     }
 
@@ -305,8 +304,8 @@ class TiDbDocumentStore(
      */
     suspend fun createTable() {
         withConnection { connection ->
-            connection.createStatement(table.createTableSql()).rowsUpdated().toList()
-            connection.createStatement(table.createUpdateTableSql()).rowsUpdated().toList()
+            connection.createStatement(table.createTableSql).rowsUpdated().toList()
+            connection.createStatement(table.createUpdateTableSql).rowsUpdated().toList()
         }
     }
 

@@ -33,56 +33,54 @@ class TiDbTable(table: String) {
      * The `deleted` column holds the time from which a deleted document can be removed, which is done by the TTL jobs
      * of the database. It is null for the documents that are not deleted, which are never removed.
      */
-    fun createTableSql(): String {
-        return """
-            CREATE TABLE IF NOT EXISTS $tableName (
-                $PARTITION_HASH BIGINT NOT NULL,
-                $PARTITION_KEY $keyType,
-                $LOCAL_KEY $keyType,
-                $VERSION BIGINT NOT NULL,
-                $BODY JSON,
-                $DELETED TIMESTAMP NULL,
-                PRIMARY KEY ($PARTITION_HASH, $PARTITION_KEY, $LOCAL_KEY) CLUSTERED
-            ) TTL = $DELETED + INTERVAL 0 DAY
-            """.trimIndent()
-    }
+    val createTableSql = """
+        CREATE TABLE IF NOT EXISTS $tableName (
+            $PARTITION_HASH BIGINT NOT NULL,
+            $PARTITION_KEY $keyType,
+            $LOCAL_KEY $keyType,
+            $VERSION BIGINT NOT NULL,
+            $BODY JSON,
+            $DELETED TIMESTAMP NULL,
+            PRIMARY KEY ($PARTITION_HASH, $PARTITION_KEY, $LOCAL_KEY) CLUSTERED
+        ) TTL = $DELETED + INTERVAL 0 DAY
+    """.trimIndent()
 
     /**
      * Creates the temporary table holding the documents of an update, which has the name of the table followed by
      * `_update`. Its definition is shared by all the sessions, whereas its rows are kept in the memory of the
      * database, are only visible to the transaction that inserted them, and are removed when it completes.
      */
-    fun createUpdateTableSql(): String {
-        return """
-            CREATE GLOBAL TEMPORARY TABLE IF NOT EXISTS $updateTableName (
-                i INT NOT NULL PRIMARY KEY,
-                $PARTITION_HASH BIGINT NOT NULL,
-                $PARTITION_KEY $keyType,
-                $LOCAL_KEY $keyType,
-                $VERSION BIGINT NOT NULL,
-                $BODY JSON,
-                $IS_CHECK BOOLEAN NOT NULL
-            ) ON COMMIT DELETE ROWS
-            """.trimIndent()
-    }
+    val createUpdateTableSql = """
+        CREATE GLOBAL TEMPORARY TABLE IF NOT EXISTS $updateTableName (
+            i INT NOT NULL PRIMARY KEY,
+            $PARTITION_HASH BIGINT NOT NULL,
+            $PARTITION_KEY $keyType,
+            $LOCAL_KEY $keyType,
+            $VERSION BIGINT NOT NULL,
+            $BODY JSON,
+            $IS_CHECK BOOLEAN NOT NULL
+        ) ON COMMIT DELETE ROWS
+    """.trimIndent()
 
     /**
      * Returns the statement creating a document, which fails if the document already exists. Its parameters are the
      * partition key, twice, the local key, the body, and the time, in seconds since the epoch, from which the
      * document can be removed if it is deleted.
      */
-    fun insertSql(): String =
-        "INSERT INTO $tableName ($PARTITION_HASH, $PARTITION_KEY, $LOCAL_KEY, $VERSION, $BODY, $DELETED) " +
-            "VALUES (CRC32(?), ?, ?, 1, ?, FROM_UNIXTIME(?))"
+    val insertSql: String = """
+        INSERT INTO $tableName ($PARTITION_HASH, $PARTITION_KEY, $LOCAL_KEY, $VERSION, $BODY, $DELETED)
+        VALUES (CRC32(?), ?, ?, 1, ?, FROM_UNIXTIME(?))
+    """.trimIndent()
 
     /**
      * Returns the statement updating a document, which doesn't update any row if the document doesn't have the
      * expected version. Its parameters are the body, the time, in seconds since the epoch, from which the document
      * can be removed if it is deleted, the partition key, twice, the local key and the expected version.
      */
-    fun updateSql(): String =
-        "UPDATE $tableName SET $VERSION = $VERSION + 1, $BODY = ?, $DELETED = FROM_UNIXTIME(?) " +
-            "WHERE $PARTITION_HASH = CRC32(?) AND $PARTITION_KEY = ? AND $LOCAL_KEY = ? AND $VERSION = ?"
+    val updateSql: String = """
+        UPDATE $tableName SET $VERSION = $VERSION + 1, $BODY = ?, $DELETED = FROM_UNIXTIME(?)
+        WHERE $PARTITION_HASH = CRC32(?) AND $PARTITION_KEY = ? AND $LOCAL_KEY = ? AND $VERSION = ?
+    """.trimIndent()
 
     /**
      * Returns the script updating or checking the given number of documents. TiDB doesn't support stored procedures,
@@ -141,7 +139,7 @@ class TiDbTable(table: String) {
             COMMIT;
 
             SELECT CAST(@conflict AS SIGNED)
-            """.trimIndent()
+        """.trimIndent()
     }
 
     private fun quoteIdentifier(identifier: String): String = "`${identifier.replace("`", "``")}`"

@@ -1,0 +1,4 @@
+root = true
+
+[*.{kt,kts}]
+ij_kotlin_align_multiline_binary_operation = true
