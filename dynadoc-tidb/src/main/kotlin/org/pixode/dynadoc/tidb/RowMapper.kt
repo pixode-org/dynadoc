@@ -23,8 +23,10 @@ object RowMapper {
     fun toDocument(row: Readable): Document = Document(
         id = toDocumentKey(row),
         body = row.get(BODY, String::class.java)?.let { Json.parseToJsonElement(it) },
-        version = checkNotNull(row.get(VERSION, Long::class.javaObjectType)),
+        version = toVersion(row),
     )
+
+    fun toVersion(row: Readable): Long = checkNotNull(row.get(VERSION, Long::class.javaObjectType))
 
     fun toDocumentKey(row: Readable): DocumentKey = DocumentKey(
         partitionKey = checkNotNull(row.get(PARTITION_KEY, String::class.java)),

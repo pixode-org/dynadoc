@@ -1,7 +1,8 @@
 package org.pixode.dynadoc.tidb
 
+import io.asyncer.r2dbc.mysql.MySqlConnectionConfiguration
+import io.asyncer.r2dbc.mysql.MySqlConnectionFactory
 import io.r2dbc.spi.Connection
-import io.r2dbc.spi.ConnectionFactories
 import io.r2dbc.spi.ConnectionFactory
 import io.r2dbc.spi.R2dbcException
 import io.r2dbc.spi.Statement
@@ -835,8 +836,17 @@ class TiDbDocumentStoreTests {
         @JvmStatic
         fun globalSetup() {
             require(container.isRunning()) { container.logs }
-            connectionFactory = ConnectionFactories.get(
-                "r2dbc:mysql://${container.username}@${container.host}:${container.getMappedPort(4000)}/$DATABASE"
+            // The statements are prepared on the server, which lets TiDB cache their plans
+            connectionFactory = MySqlConnectionFactory.from(
+                MySqlConnectionConfiguration.builder()
+                    .host(container.host)
+                    .port(container.getMappedPort(4000))
+                    .user(container.username)
+                    .database(DATABASE)
+                    .useServerPrepareStatement()
+                    // TiDB only caches the plans of the statements reading or writing several keys with this setting
+                    .sessionVariables("tidb_opt_fix_control='44830:ON'")
+                    .build()
             )
 
             runBlocking {

@@ -415,14 +415,13 @@ val connectionFactory: ConnectionFactory =
 
 val documentStore = TiDbDocumentStore(connectionFactory, "documents")
 
-// Create the table, clustered by hash of the partition key, partition key then local key,
-// and the temporary table used to update its documents
+// Create the table, clustered by hash of the partition key, partition key then local key
 documentStore.createTable()
 
 val entityStore = EntityStore(documentStore, DefaultJsonSerializer)
 ```
 
-The module only depends on the R2DBC SPI, so an R2DBC driver for MySQL, such as `io.asyncer:r2dbc-mysql`, must be added to the project. The driver must send statements using the text protocol and allow several statements in a request, which is the default with `r2dbc-mysql`. Every operation takes a connection from the `ConnectionFactory` and closes it when it completes, so a connection pool such as `r2dbc-pool` should be used.
+The module only depends on the R2DBC SPI, so an R2DBC driver for MySQL, such as `io.asyncer:r2dbc-mysql`, must be added to the project. Every operation takes a connection from the `ConnectionFactory` and closes it when it completes, so a connection pool such as `r2dbc-pool` should be used. The driver can send the statements as text, which is the default with `r2dbc-mysql`, or as [prepared statements](#prepared-statements).
 
 The table name can be qualified with a database, as in `"database.documents"`. TiDB 7.4 or later is required.
 
@@ -440,15 +439,47 @@ The row is then removed by the TTL jobs of TiDB, which run every hour by default
 
 An update of a single document is a single `INSERT` or `UPDATE` statement, which only writes the document if it has the expected version.
 
-TiDB doesn't support stored procedures, so an update of multiple documents (for example with `EntityStore.transaction`) is a script made of several statements, which are sent together to the database, with the documents as its parameters. In both cases, an update takes a single round trip to the database and runs as a single transaction.
+An update of multiple documents (for example with `EntityStore.transaction`) is a transaction made of a few statements, which are sent one after the other on the same connection. Their number doesn't depend on the number of documents:
 
-The script first inserts the documents into a [global temporary table](https://docs.pingcap.com/tidb/stable/temporary-tables), which `createTable` creates along with the table, under the name of the table followed by `_update`. The definition of that table is shared, but its rows are kept in the memory of TiDB, are only visible to the transaction that inserted them, and are removed when it completes, so concurrent updates don't see each other's documents. The documents of an update are limited to the size set by `tidb_tmp_table_max_size`, which is 64 MB by default.
+1. The transaction begins.
+2. The versions of all the documents, including the checked ones, are read for update.
+3. If a document doesn't have the expected version, nothing is written, the transaction is rolled back and an `UpdateConflictException` referring to that document is thrown.
+4. The updated documents are written with a single statement. A checked document that doesn't exist is also written, then deleted by a second statement, so that a concurrent creation of the same document causes a conflict.
+5. The transaction is committed.
 
-The script then checks the versions of the documents, and writes them. When a document doesn't have the expected version, nothing is written.
+An update of multiple documents therefore takes four round trips to the database in the most common case, where the documents exist and none of them is only checked.
 
-Updates are optimistic transactions: they don't lock the documents while they run, and conflicts are detected by TiDB when the transaction is committed. If any of the documents of an update, including the checked ones, has been written by another transaction since the update started, the commit fails and an `UpdateConflictException` is thrown. TiDB doesn't indicate which document caused the conflict, so the exception then refers to the first document of the update. Under contention, using a `RetryPolicy` with `transaction` retries the update with fresh versions of the documents.
+Updates are optimistic transactions: they don't lock the documents while they run, and conflicts are detected by TiDB when the transaction is committed. If any of the documents of an update, including the checked ones, has been written by another transaction since the update started, the commit fails and an `UpdateConflictException` is thrown. TiDB doesn't indicate which document caused that conflict, so the exception then refers to the first document of the update. Under contention, using a `RetryPolicy` with `transaction` retries the update with fresh versions of the documents.
 
 An update never waits for another update of the store. It can however wait if one of its documents is locked for a long time by a transaction of another application, such as a pessimistic transaction left open.
+
+### Prepared statements
+
+When TiDB receives a statement as text, it parses and plans it every time. Most of the statements of the store have the same text whatever their parameters (only the number of documents changes the text of the statements of an update of multiple documents), so they can be prepared on the server: TiDB then reuses the plan it cached for the statement, which lowers its CPU usage. Since the SQL layer of TiDB is often the first resource to run out under a write-heavy load, this can increase the throughput of the store.
+
+With `r2dbc-mysql`, the connections have to be created with `useServerPrepareStatement`:
+
+```kotlin
+val connectionFactory: ConnectionFactory = ConnectionPool(
+    ConnectionPoolConfiguration.builder(
+        MySqlConnectionFactory.from(
+            MySqlConnectionConfiguration.builder()
+                .host("host")
+                .port(4000)
+                .user("user")
+                .password("password")
+                .database("database")
+                .useServerPrepareStatement()
+                .sessionVariables("tidb_opt_fix_control='44830:ON'")
+                .build()
+        )
+    ).build()
+)
+```
+
+- A prepared statement and its cached plan belong to a connection, so the connections have to be reused, which a pool does. With a connection created for each operation, preparing statements only adds a round trip.
+- TiDB doesn't cache the plans of the statements reading or writing several keys at once, which are used by the updates of multiple documents, unless `tidb_opt_fix_control` includes `44830:ON`. It is safe to enable with the store, which never sends the same key twice in a statement. Without it everything works, but the updates of multiple documents are planned every time.
+- The statements reading documents and updating a single document are cached without any setting.
 
 ### Queries
 

@@ -6,15 +6,12 @@ import io.r2dbc.spi.R2dbcException
 import io.r2dbc.spi.Statement
 import java.time.Clock
 import java.time.Duration
-import java.util.Optional
-import kotlin.jvm.optionals.getOrNull
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.emitAll
 import kotlinx.coroutines.flow.emptyFlow
 import kotlinx.coroutines.flow.flow
-import kotlinx.coroutines.flow.last
-import kotlinx.coroutines.flow.lastOrNull
+import kotlinx.coroutines.flow.fold
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.toList
 import kotlinx.coroutines.reactive.asFlow
@@ -45,11 +42,10 @@ private val conflictCodes: Set<Int> =
  * and can be split across several regions. Deleted documents are kept with a null body so that their version is
  * preserved, until they are removed by the TTL jobs of the database, once [expiration] has elapsed.
  *
- * A single document is updated by a single statement. TiDB doesn't support stored procedures, so multiple documents
- * are updated by a script whose statements are sent together, with the documents as its parameters. An update is
- * therefore a single round trip to the database, and a single transaction. The script first inserts the documents
- * into a temporary table (see [createTable]), whose rows are kept in memory and are private to the transaction. It
- * then checks and writes the documents.
+ * A single document is updated by a single statement. Multiple documents are updated by a transaction made of a fixed
+ * number of statements, whatever the number of documents: the transaction begins, reads the versions of the documents,
+ * writes them all with a single statement, then commits. Statements with the same shape are executed many times, so
+ * that they can be prepared (see the README).
  *
  * Updates are optimistic transactions, which don't lock the documents: an update fails when it is committed if any
  * of its documents has been written by a concurrent transaction.
@@ -112,7 +108,7 @@ class TiDbDocumentStore(
                                 .bind(5, document.version)
                         }
 
-                    statement.rowsUpdated().toList().sum()
+                    statement.rowsUpdated().sum()
                 }
             } catch (exception: R2dbcException) {
                 // The document has been created or written by a concurrent transaction
@@ -131,27 +127,50 @@ class TiDbDocumentStore(
     private suspend fun updateMultipleDocuments(updatedList: List<Document>, checkedList: List<Document>) {
         val documents: List<Document> = updatedList + checkedList
 
-        val conflict: Long? = withConnection { connection ->
+        // A checked document that doesn't exist is written then deleted, so that a concurrent insert of the same
+        // document causes a conflict
+        val missingList: List<Document> = checkedList.filter { it.version == 0L }
+        val written: List<Pair<Document, String?>> =
+            updatedList.map { it to fromBody(it.body) } + missingList.map { it to null }
+
+        withConnection { connection ->
             try {
-                // Each statement of the script has its own result, the last one being the result of the script
-                connection.createStatement(table.updateScript(documents.size))
-                    .apply { bindDocuments(updatedList, checkedList) }
+                connection.createStatement("BEGIN OPTIMISTIC").rowsUpdated()
+
+                // Reading the documents for update makes the commit fail if a concurrent transaction writes any
+                // of them, including the documents that are only checked
+                val versions: Map<DocumentKey, Long> = connection.createStatement(table.selectVersionsSql(documents.size))
+                    .apply { bindKeys(documents.map { it.id }) }
                     .execute()
+                    .awaitSingle()
+                    .map { row -> RowMapper.toDocumentKey(row) to RowMapper.toVersion(row) }
                     .asFlow()
-                    .map { result ->
-                        result.map { row -> Optional.ofNullable(row.get(0, Long::class.javaObjectType)) }
-                            .asFlow()
-                            .lastOrNull()
-                    }
-                    .last()
-                    ?.getOrNull()
-            } catch (exception: Throwable) {
-                // The script stops at the statement that failed, which can leave its transaction open
-                withContext(NonCancellable) {
-                    connection.createStatement("ROLLBACK").rowsUpdated().toList()
+                    .fold(HashMap()) { versions, (id, version) -> versions.also { it[id] = version } }
+
+                documents.firstOrNull { (versions[it.id] ?: 0) != it.version }?.let { conflict ->
+                    throw UpdateConflictException(conflict.id)
                 }
 
-                // The conflict has been detected by the database rather than by the script
+                if (written.isNotEmpty()) {
+                    connection.createStatement(table.upsertSql(written.size))
+                        .apply { bindWrittenDocuments(written) }
+                        .rowsUpdated()
+                }
+
+                if (missingList.isNotEmpty()) {
+                    connection.createStatement(table.deleteSql(missingList.size))
+                        .apply { bindKeys(missingList.map { it.id }) }
+                        .rowsUpdated()
+                }
+
+                connection.createStatement("COMMIT").rowsUpdated()
+            } catch (exception: Throwable) {
+                // The transaction is still open if the failure didn't happen when it was committed
+                withContext(NonCancellable) {
+                    connection.createStatement("ROLLBACK").rowsUpdated()
+                }
+
+                // The conflict has been detected by the database rather than by the store
                 if (exception is R2dbcException && exception.errorCode in conflictCodes) {
                     throw UpdateConflictException(documents[0].id)
                 } else {
@@ -159,29 +178,21 @@ class TiDbDocumentStore(
                 }
             }
         }
-
-        if (conflict != null) {
-            throw UpdateConflictException(documents[conflict.toInt()].id)
-        }
     }
 
-    private fun Statement.bindDocuments(updated: List<Document>, checked: List<Document>) {
+    private fun Statement.bindWrittenDocuments(written: List<Pair<Document, String?>>) {
+        // The time from which the documents can be removed if they are deleted
+        val deleted: Long = expirationTime()
         var index = 0
 
-        // The time from which the documents deleted by the update can be removed
-        bind(index++, expirationTime())
-
-        fun bindDocument(document: Document, body: JsonElement?, check: Boolean) {
+        for ((document, body) in written) {
             bind(index++, document.id.partitionKey)
             bind(index++, document.id.partitionKey)
             bind(index++, document.id.localKey)
-            bind(index++, document.version)
-            bindNullable(index++, fromBody(body), String::class.java)
-            bind(index++, check)
+            bind(index++, document.version + 1)
+            bindNullable(index++, body, String::class.java)
+            bindNullable(index++, if (body == null) deleted else null, Long::class.javaObjectType)
         }
-
-        updated.forEach { document -> bindDocument(document, document.body, false) }
-        checked.forEach { document -> bindDocument(document, null, true) }
     }
 
     private fun fromBody(body: JsonElement?): String? {
@@ -290,14 +301,10 @@ class TiDbDocumentStore(
      * Creates the table, clustered by hash of the partition key, then partition key, then local key, so that the
      * partitions are spread evenly across the regions, and the documents of a partition are stored together and
      * sorted by local key.
-     *
-     * The temporary table holding the documents of an update is created along with the table. It has the name of the
-     * table followed by `_update`.
      */
     suspend fun createTable() {
         withConnection { connection ->
-            connection.createStatement(table.createTableSql).rowsUpdated().toList()
-            connection.createStatement(table.createUpdateTableSql).rowsUpdated().toList()
+            connection.createStatement(table.createTableSql).rowsUpdated()
         }
     }
 
@@ -315,8 +322,8 @@ class TiDbDocumentStore(
         }
     }
 
-    private fun Statement.rowsUpdated(): Flow<Long> =
-        execute().asFlow().map { result -> result.rowsUpdated.awaitFirstOrNull() ?: 0L }
+    private suspend fun Statement.rowsUpdated(): List<Long> =
+        execute().asFlow().map { result -> result.rowsUpdated.awaitFirstOrNull() ?: 0L }.toList()
 
     private fun Statement.asDocuments(): Flow<Document> = flow {
         execute().asFlow().collect { result ->

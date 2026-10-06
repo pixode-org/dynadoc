@@ -1,30 +1,19 @@
 package org.pixode.dynadoc.tidb
 
-private const val IS_CHECK = "is_check"
-
 const val MAX_KEY_LENGTH = 255
 
+// The statements reading and writing up to 9 documents are created once
+private const val CACHED_COUNT = 10
+
 class TiDbTable(table: String) {
-    val tableName: String
-
-    private val updateTableName: String
-
-    init {
-        val tableNameParts: List<String> = table.split('.')
-
-        tableName = tableNameParts.joinToString(".", transform = ::quoteIdentifier)
-        updateTableName = (tableNameParts.dropLast(1) + "${tableNameParts.last()}_update")
-            .joinToString(".", transform = ::quoteIdentifier)
-    }
+    val tableName: String = table.split('.').joinToString(".", transform = ::quoteIdentifier)
 
     // The collation sorts the keys by their UTF-8 encoding, without ignoring trailing spaces
     private val keyType: String = "VARCHAR($MAX_KEY_LENGTH) CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_bin NOT NULL"
 
-    private val rowFilter: String =
-        "t.$PARTITION_HASH = o.$PARTITION_HASH AND t.$PARTITION_KEY = o.$PARTITION_KEY AND t.$LOCAL_KEY = o.$LOCAL_KEY"
-
-    // The scripts updating up to 9 documents, each one being created when it is first used
-    private val cachedUpdateStatement: List<Lazy<String>> = List(10) { count -> lazy { createUpdateScript(count) } }
+    private val cachedSelectVersionsSql: (Int) -> String = cached(::createSelectVersionsSql)
+    private val cachedUpsertSql: (Int) -> String = cached(::createUpsertSql)
+    private val cachedDeleteSql: (Int) -> String = cached(::createDeleteSql)
 
     /**
      * Creates the table, clustered by hash of the partition key, then partition key, then local key, so that the
@@ -44,23 +33,6 @@ class TiDbTable(table: String) {
             $DELETED TIMESTAMP NULL,
             PRIMARY KEY ($PARTITION_HASH, $PARTITION_KEY, $LOCAL_KEY) CLUSTERED
         ) TTL = $DELETED + INTERVAL 0 DAY
-    """.trimIndent()
-
-    /**
-     * Creates the temporary table holding the documents of an update, which has the name of the table followed by
-     * `_update`. Its definition is shared by all the sessions, whereas its rows are kept in the memory of the
-     * database, are only visible to the transaction that inserted them, and are removed when it completes.
-     */
-    val createUpdateTableSql = """
-        CREATE GLOBAL TEMPORARY TABLE IF NOT EXISTS $updateTableName (
-            i INT NOT NULL PRIMARY KEY,
-            $PARTITION_HASH BIGINT NOT NULL,
-            $PARTITION_KEY $keyType,
-            $LOCAL_KEY $keyType,
-            $VERSION BIGINT NOT NULL,
-            $BODY JSON,
-            $IS_CHECK BOOLEAN NOT NULL
-        ) ON COMMIT DELETE ROWS
     """.trimIndent()
 
     /**
@@ -84,63 +56,50 @@ class TiDbTable(table: String) {
     """.trimIndent()
 
     /**
-     * Returns the script updating or checking the given number of documents. TiDB doesn't support stored procedures,
-     * so the statements of the script are sent together, in a single request.
+     * Returns the statement reading the key and the version of the given number of documents, which exist, within a
+     * transaction. In an optimistic transaction, reading the documents for update doesn't lock them, but makes the
+     * commit fail if any of them has been written by a concurrent transaction since the transaction began.
      *
-     * The parameters of the script are the time, in seconds since the epoch, from which the documents deleted by the
-     * update can be removed, then, for each document, the partition key, twice, the local key, the expected version,
-     * the new body, and whether the version of the document is checked without the document being modified.
-     *
-     * The last statement of the script returns null when the documents have been updated. When a document doesn't
-     * have the expected version, none of the documents is updated, and the index of that document is returned. The
-     * script fails, without its transaction being committed, when a document is written by a concurrent transaction.
+     * The parameters of the statement are, for each document, the partition key, twice, and the local key.
      */
-    fun updateScript(count: Int): String =
-        cachedUpdateStatement.getOrNull(count)?.value ?: createUpdateScript(count)
+    fun selectVersionsSql(count: Int): String = cachedSelectVersionsSql(count)
 
-    private fun createUpdateScript(count: Int): String {
-        val rows: List<String> = (0 until count).map { index -> "($index, CRC32(?), ?, ?, ?, ?, ?)" }
+    private fun createSelectVersionsSql(count: Int): String = """
+        SELECT $PARTITION_KEY, $LOCAL_KEY, $VERSION FROM $tableName
+        WHERE ($PARTITION_HASH, $PARTITION_KEY, $LOCAL_KEY) IN (${keyTuples(count)}) FOR UPDATE
+    """.trimIndent()
 
-        return """
-            SET @deleted = FROM_UNIXTIME(?);
+    /**
+     * Returns the statement writing the given number of documents, which are created if they don't exist. Its
+     * parameters are, for each document, the partition key, twice, the local key, the new version, the new body, and
+     * the time, in seconds since the epoch, from which the document can be removed if it is deleted.
+     *
+     * The versions of the documents must have been checked before the statement is executed.
+     */
+    fun upsertSql(count: Int): String = cachedUpsertSql(count)
 
-            -- A concurrent write to any of the documents makes the commit fail
-            BEGIN OPTIMISTIC;
+    private fun createUpsertSql(count: Int): String = """
+        INSERT INTO $tableName ($PARTITION_HASH, $PARTITION_KEY, $LOCAL_KEY, $VERSION, $BODY, $DELETED)
+        VALUES ${(0 until count).joinToString { "(CRC32(?), ?, ?, ?, ?, FROM_UNIXTIME(?))" }}
+        ON DUPLICATE KEY UPDATE $VERSION = VALUES($VERSION), $BODY = VALUES($BODY), $DELETED = VALUES($DELETED)
+    """.trimIndent()
 
-            -- The temporary table is emptied at the end of the transaction
-            INSERT INTO $updateTableName
-                (i, $PARTITION_HASH, $PARTITION_KEY, $LOCAL_KEY, $VERSION, $BODY, $IS_CHECK)
-            VALUES ${rows.joinToString()};
+    /**
+     * Returns the statement deleting the given number of documents. The parameters of the statement are, for each
+     * document, the partition key, twice, and the local key.
+     */
+    fun deleteSql(count: Int): String = cachedDeleteSql(count)
 
-            -- Include the checked documents in the conflict detection of the commit
-            -- The hints read each row using its primary key, rather than reading the whole table
-            SELECT /*+ INL_JOIN(t) */ t.$VERSION FROM $tableName t JOIN $updateTableName o ON $rowFilter
-            WHERE o.$IS_CHECK FOR UPDATE;
+    private fun createDeleteSql(count: Int): String = """
+        DELETE FROM $tableName WHERE ($PARTITION_HASH, $PARTITION_KEY, $LOCAL_KEY) IN (${keyTuples(count)})
+    """.trimIndent()
 
-            -- Index of the first document with an unexpected version, if any
-            SET @conflict = (
-                SELECT /*+ INL_JOIN(t) */ MIN(o.i) FROM $updateTableName o LEFT JOIN $tableName t ON $rowFilter
-                WHERE COALESCE(t.$VERSION, 0) <> o.$VERSION
-            );
+    private fun keyTuples(count: Int): String = (0 until count).joinToString { "(CRC32(?), ?, ?)" }
 
-            -- Fails if a document has been created by a concurrent transaction
-            INSERT INTO $tableName ($PARTITION_HASH, $PARTITION_KEY, $LOCAL_KEY, $VERSION, $BODY, $DELETED)
-            SELECT o.$PARTITION_HASH, o.$PARTITION_KEY, o.$LOCAL_KEY, 1, o.$BODY, IF(o.$BODY IS NULL, @deleted, NULL)
-            FROM $updateTableName o
-            WHERE o.$VERSION = 0 AND @conflict IS NULL;
+    private fun cached(create: (Int) -> String): (Int) -> String {
+        val statements: List<Lazy<String>> = List(CACHED_COUNT) { count -> lazy { create(count) } }
 
-            -- Missing checked documents were inserted above to conflict with concurrent inserts, remove them
-            DELETE /*+ INL_JOIN(t) */ t FROM $tableName t JOIN $updateTableName o ON $rowFilter
-            WHERE o.$IS_CHECK AND o.$VERSION = 0 AND @conflict IS NULL;
-
-            UPDATE /*+ INL_JOIN(t) */ $tableName t JOIN $updateTableName o ON $rowFilter
-            SET t.$VERSION = o.$VERSION + 1, t.$BODY = o.$BODY, t.$DELETED = IF(o.$BODY IS NULL, @deleted, NULL)
-            WHERE NOT o.$IS_CHECK AND o.$VERSION > 0 AND @conflict IS NULL;
-
-            COMMIT;
-
-            SELECT CAST(@conflict AS SIGNED)
-        """.trimIndent()
+        return { count -> statements.getOrNull(count)?.value ?: create(count) }
     }
 
     private fun quoteIdentifier(identifier: String): String = "`${identifier.replace("`", "``")}`"
