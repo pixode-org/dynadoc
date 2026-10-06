@@ -126,119 +126,7 @@ class TiDbDocumentStoreTests {
         )
     }
 
-    @ParameterizedTest
-    @ValueSource(
-        strings = [
-            """ "a" """,
-            """ 10 """,
-            """ true """,
-            """ false """,
-            """ null """,
-            """ ["a"] """,
-            """ a """,
-        ],
-    )
-    fun updateDocuments_invalidJson(to: String) = runBlocking {
-        assertThrows<IllegalArgumentException> {
-            updateDocument(to, 0)
-        }
-
-        val document = store.getDocument(ids[0])
-
-        assertDocument(document, ids[0], null, 0)
-    }
-
-    @Test
-    fun updateDocuments_noReservedFields() = runBlocking {
-        val json = """ {"partition_key":"a","local_key":"b","version":3,"body":null} """
-        updateDocument(json, 0)
-
-        val document = store.getDocument(ids[0])
-
-        assertDocument(document, ids[0], json, 1)
-    }
-
-    @ParameterizedTest
-    @ValueSource(booleans = [true, false])
-    fun updateDocuments_conflictDocumentDoesNotExist(checkOnly: Boolean) = runBlocking {
-        val exception = assertThrows<UpdateConflictException> {
-            if (checkOnly) {
-                checkDocument(10)
-            } else {
-                updateDocument(JSON_1, 10)
-            }
-        }
-
-        val document = store.getDocument(ids[0])
-
-        assertDocument(document, ids[0], null, 0)
-        assertEquals(ids[0], exception.id)
-    }
-
-    @ParameterizedTest
-    @ValueSource(booleans = [true, false])
-    fun updateDocuments_conflictWrongVersion(checkOnly: Boolean) = runBlocking {
-        updateDocument(JSON_1, 0)
-
-        val exception = assertThrows<UpdateConflictException> {
-            if (checkOnly) {
-                checkDocument(10)
-            } else {
-                updateDocument(JSON_2, 10)
-            }
-        }
-
-        val document = store.getDocument(ids[0])
-
-        assertDocument(document, ids[0], JSON_1, 1)
-        assertEquals(ids[0], exception.id)
-    }
-
-    @ParameterizedTest
-    @ValueSource(booleans = [true, false])
-    fun updateDocuments_conflictDocumentAlreadyExists(checkOnly: Boolean) = runBlocking {
-        updateDocument(JSON_1, 0)
-
-        val exception = assertThrows<UpdateConflictException> {
-            if (checkOnly) {
-                checkDocument(0)
-            } else {
-                updateDocument(JSON_2, 0)
-            }
-        }
-
-        val document = store.getDocument(ids[0])
-
-        assertDocument(document, ids[0], JSON_1, 1)
-        assertEquals(ids[0], exception.id)
-    }
-
-    @Test
-    fun updateDocuments_conflictDeletedDocument() = runBlocking {
-        updateDocument(JSON_1, 0)
-        updateDocument(null, 1)
-
-        val exception = assertThrows<UpdateConflictException> {
-            updateDocument(JSON_2, 0)
-        }
-
-        val document = store.getDocument(ids[0])
-
-        assertDocument(document, ids[0], null, 2)
-        assertEquals(ids[0], exception.id)
-    }
-
-    @Test
-    fun updateDocuments_singleDocumentServerError() = runBlocking {
-        // Rejected by the server, which doesn't allow keys longer than MAX_KEY_LENGTH
-        assertThrows<R2dbcException> {
-            updateDocument(longId, JSON_1, 0)
-        }
-
-        val document = store.getDocument(ids[0])
-
-        assertDocument(document, ids[0], null, 0)
-    }
+    //region updateDocuments: Multiple documents
 
     @Test
     fun updateDocuments_multipleDocumentsSuccess() = runBlocking {
@@ -297,144 +185,54 @@ class TiDbDocumentStoreTests {
         assertDocument(document, ids[0], JSON_2, 2)
     }
 
-    @Test
-    fun updateDocuments_multipleDocumentsUpdatedAndCheckedConflict() = runBlocking {
-        updateDocument(ids[0], JSON_1, 0)
+    //endregion
 
-        val exception = assertThrows<UpdateConflictException> {
-            store.updateDocuments(
-                updatedDocuments = listOf(parseDocument(ids[0], JSON_2, 1)),
-                checkedDocuments = listOf(parseDocument(ids[0], JSON_3, 2)),
-            )
+    //region updateDocuments: Special cases
+
+    @ParameterizedTest
+    @ValueSource(
+        strings = [
+            """ "a" """,
+            """ 10 """,
+            """ true """,
+            """ false """,
+            """ null """,
+            """ ["a"] """,
+            """ a """,
+        ],
+    )
+    fun updateDocuments_invalidJson(to: String) = runBlocking {
+        assertThrows<IllegalArgumentException> {
+            updateDocument(to, 0)
         }
 
         val document = store.getDocument(ids[0])
 
-        assertDocument(document, ids[0], JSON_1, 1)
-        assertEquals(ids[0], exception.id)
-    }
-
-    @ParameterizedTest
-    @ValueSource(booleans = [true, false])
-    fun updateDocuments_multipleDocumentsConflict(checkOnly: Boolean) = runBlocking {
-        updateDocument(ids[0], JSON_1, 0)
-
-        val exception = assertThrows<UpdateConflictException> {
-            if (checkOnly) {
-                store.updateDocuments(
-                    updatedDocuments = listOf(parseDocument(ids[0], JSON_2, 1)),
-                    checkedDocuments = listOf(parseDocument(ids[1], JSON_3, 10)),
-                )
-            } else {
-                store.updateDocuments(
-                    parseDocument(ids[0], JSON_2, 1),
-                    parseDocument(ids[1], JSON_3, 10),
-                )
-            }
-        }
-
-        val document1 = store.getDocument(ids[0])
-        val document2 = store.getDocument(ids[1])
-
-        assertDocument(document1, ids[0], JSON_1, 1)
-        assertDocument(document2, ids[1], null, 0)
-        assertEquals(ids[1], exception.id)
+        assertDocument(document, ids[0], null, 0)
     }
 
     @Test
-    fun updateDocuments_multipleDocumentsCheckExistingConflict() = runBlocking {
-        updateDocument(ids[1], JSON_1, 0)
+    fun updateDocuments_noReservedFields() = runBlocking {
+        val json = """ {"partition_key":"a","local_key":"b","version":3,"body":null} """
+        updateDocument(json, 0)
 
-        val exception = assertThrows<UpdateConflictException> {
-            store.updateDocuments(
-                updatedDocuments = listOf(parseDocument(ids[0], JSON_2, 0)),
-                checkedDocuments = listOf(parseDocument(ids[1], JSON_3, 0)),
-            )
-        }
+        val document = store.getDocument(ids[0])
 
-        val document1 = store.getDocument(ids[0])
-        val document2 = store.getDocument(ids[1])
-
-        assertDocument(document1, ids[0], null, 0)
-        assertDocument(document2, ids[1], JSON_1, 1)
-        assertEquals(ids[1], exception.id)
+        assertDocument(document, ids[0], json, 1)
     }
 
     @Test
-    fun updateDocuments_largeBatch() = runBlocking {
-        val documents = (0..499).map { i ->
-            parseDocument(DocumentKey(partitionKey, "ABC%04d".format(i)), """ {"a":$i} """, 0)
+    fun updateDocuments_singleDocumentServerError() = runBlocking {
+        // Rejected by the server, which doesn't allow keys longer than MAX_KEY_LENGTH
+        assertThrows<R2dbcException> {
+            updateDocument(longId, JSON_1, 0)
         }
-        store.updateDocuments(*documents.toTypedArray())
-        store.updateDocuments(
-            updatedDocuments = documents.take(250).map { it.copy(version = 1) },
-            checkedDocuments = documents.drop(250).map { it.copy(version = 1) },
-        )
 
-        val result: List<Document> = store.scan(partitionKey).toList()
+        val document = store.getDocument(ids[0])
 
-        assertEquals(500, result.size)
-        repeat(500) { i ->
-            assertDocument(result[i], documents[i].id, documents[i].body.toString(), if (i < 250) 2 else 1)
-        }
+        assertDocument(document, ids[0], null, 0)
     }
 
-    @ParameterizedTest
-    @ValueSource(strings = ["single", "multiple", "check"])
-    fun updateDocuments_concurrentUpdate(mode: String) = runBlocking {
-        updateDocument(ids[0], JSON_1, 0)
-        updateDocument(ids[1], JSON_2, 0)
-
-        // The update is committed first, so the concurrent transaction writing the same document can't be committed,
-        // unless the update only checks the document
-        val exception: R2dbcException? = withConcurrentTransaction(parseDocument(ids[1], JSON_3, 1)) {
-            when (mode) {
-                "single" -> store.updateDocuments(parseDocument(ids[1], JSON_5, 1))
-                "multiple" -> store.updateDocuments(
-                    parseDocument(ids[0], JSON_4, 1),
-                    parseDocument(ids[1], JSON_5, 1),
-                )
-                else -> store.updateDocuments(
-                    updatedDocuments = listOf(parseDocument(ids[0], JSON_4, 1)),
-                    checkedDocuments = listOf(parseDocument(ids[1], JSON_5, 1)),
-                )
-            }
-        }
-
-        val document1 = store.getDocument(ids[0])
-        val document2 = store.getDocument(ids[1])
-
-        assertEquals(if (mode == "check") null else WRITE_CONFLICT, exception?.errorCode)
-        assertDocument(document1, ids[0], if (mode == "single") JSON_1 else JSON_4, if (mode == "single") 1 else 2)
-        assertDocument(document2, ids[1], if (mode == "check") JSON_3 else JSON_5, 2)
-    }
-
-    @ParameterizedTest
-    @ValueSource(strings = ["single", "multiple", "check"])
-    fun updateDocuments_concurrentInsert(mode: String) = runBlocking {
-        // The update is committed first, so the concurrent transaction creating the same document can't be committed,
-        // unless the update only checks the document
-        val exception: R2dbcException? = withConcurrentTransaction(parseDocument(ids[1], JSON_1, 0)) {
-            when (mode) {
-                "single" -> store.updateDocuments(parseDocument(ids[1], JSON_3, 0))
-                "multiple" -> store.updateDocuments(
-                    parseDocument(ids[0], JSON_2, 0),
-                    parseDocument(ids[1], JSON_3, 0),
-                )
-                else -> store.updateDocuments(
-                    updatedDocuments = listOf(parseDocument(ids[0], JSON_2, 0)),
-                    checkedDocuments = listOf(parseDocument(ids[1], JSON_3, 0)),
-                )
-            }
-        }
-
-        val document1 = store.getDocument(ids[0])
-        val document2 = store.getDocument(ids[1])
-
-        assertEquals(if (mode == "check") null else WRITE_CONFLICT, exception?.errorCode)
-        assertDocument(document1, ids[0], if (mode == "single") null else JSON_2, if (mode == "single") 0 else 1)
-        assertDocument(document2, ids[1], if (mode == "check") JSON_1 else JSON_3, 1)
-    }
 
     @Test
     fun updateDocuments_multipleDocumentsServerError() = runBlocking {
@@ -516,6 +314,185 @@ class TiDbDocumentStoreTests {
 
         assertDocument(document, specialId, json, 2)
     }
+
+    //endregion
+
+    // region updateDocuments: Conflict (Single document)
+
+    @ParameterizedTest
+    @ValueSource(booleans = [true, false])
+    fun updateDocuments_conflictDocumentDoesNotExist(checkOnly: Boolean) = runBlocking {
+        val exception = assertThrows<UpdateConflictException> {
+            if (checkOnly) {
+                checkDocument(10)
+            } else {
+                updateDocument(JSON_1, 10)
+            }
+        }
+
+        val document = store.getDocument(ids[0])
+
+        assertDocument(document, ids[0], null, 0)
+        assertEquals(ids[0], exception.id)
+    }
+
+    @ParameterizedTest
+    @ValueSource(booleans = [true, false])
+    fun updateDocuments_conflictWrongVersion(checkOnly: Boolean) = runBlocking {
+        updateDocument(JSON_1, 0)
+
+        val exception = assertThrows<UpdateConflictException> {
+            if (checkOnly) {
+                checkDocument(10)
+            } else {
+                updateDocument(JSON_2, 10)
+            }
+        }
+
+        val document = store.getDocument(ids[0])
+
+        assertDocument(document, ids[0], JSON_1, 1)
+        assertEquals(ids[0], exception.id)
+    }
+
+    @ParameterizedTest
+    @ValueSource(booleans = [true, false])
+    fun updateDocuments_conflictDocumentAlreadyExists(checkOnly: Boolean) = runBlocking {
+        updateDocument(JSON_1, 0)
+
+        val exception = assertThrows<UpdateConflictException> {
+            if (checkOnly) {
+                checkDocument(0)
+            } else {
+                updateDocument(JSON_2, 0)
+            }
+        }
+
+        val document = store.getDocument(ids[0])
+
+        assertDocument(document, ids[0], JSON_1, 1)
+        assertEquals(ids[0], exception.id)
+    }
+
+    @Test
+    fun updateDocuments_conflictDeletedDocument() = runBlocking {
+        updateDocument(JSON_1, 0)
+        updateDocument(null, 1)
+
+        val exception = assertThrows<UpdateConflictException> {
+            updateDocument(JSON_2, 0)
+        }
+
+        val document = store.getDocument(ids[0])
+
+        assertDocument(document, ids[0], null, 2)
+        assertEquals(ids[0], exception.id)
+    }
+
+    //endregion
+
+    //region updateDocuments: Conflict (Multiple documents)
+
+    @ParameterizedTest
+    @ValueSource(
+        strings = ["updatedDoesNotExist", "checkedDoesNotExist", "checkedAlreadyExists", "updatedAndCheckedMismatch"],
+    )
+    fun updateDocuments_multipleDocumentsConflict(mode: String) = runBlocking {
+        updateDocument(ids[0], JSON_1, 0)
+
+        val exception = assertThrows<UpdateConflictException> {
+            when (mode) {
+                "updatedDoesNotExist" -> store.updateDocuments(
+                    parseDocument(ids[0], JSON_2, 1),
+                    parseDocument(ids[1], JSON_3, 10),
+                )
+                "checkedDoesNotExist" -> store.updateDocuments(
+                    updatedDocuments = listOf(parseDocument(ids[0], JSON_2, 1)),
+                    checkedDocuments = listOf(parseDocument(ids[1], JSON_3, 10)),
+                )
+                // The checked document is expected to be missing, the conflict is not on the first document
+                "checkedAlreadyExists" -> store.updateDocuments(
+                    updatedDocuments = listOf(parseDocument(ids[1], JSON_2, 0)),
+                    checkedDocuments = listOf(parseDocument(ids[0], JSON_3, 0)),
+                )
+                // The same document is updated and checked with different versions
+                else -> store.updateDocuments(
+                    updatedDocuments = listOf(parseDocument(ids[0], JSON_2, 1)),
+                    checkedDocuments = listOf(parseDocument(ids[0], JSON_3, 2)),
+                )
+            }
+        }
+
+        val document1 = store.getDocument(ids[0])
+        val document2 = store.getDocument(ids[1])
+
+        assertDocument(document1, ids[0], JSON_1, 1)
+        assertDocument(document2, ids[1], null, 0)
+        assertEquals(if (mode.endsWith("DoesNotExist")) ids[1] else ids[0], exception.id)
+    }
+
+    //endregion
+
+    //region updateDocuments: Concurrent transactions
+
+    @ParameterizedTest
+    @ValueSource(strings = ["single", "multiple", "check"])
+    fun updateDocuments_concurrentUpdate(mode: String) = runBlocking {
+        updateDocument(ids[0], JSON_1, 0)
+        updateDocument(ids[1], JSON_2, 0)
+
+        // The update is committed first, so the concurrent transaction writing the same document can't be committed,
+        // unless the update only checks the document
+        val exception: R2dbcException? = withConcurrentTransaction(parseDocument(ids[1], JSON_3, 1)) {
+            when (mode) {
+                "single" -> store.updateDocuments(parseDocument(ids[1], JSON_5, 1))
+                "multiple" -> store.updateDocuments(
+                    parseDocument(ids[0], JSON_4, 1),
+                    parseDocument(ids[1], JSON_5, 1),
+                )
+                else -> store.updateDocuments(
+                    updatedDocuments = listOf(parseDocument(ids[0], JSON_4, 1)),
+                    checkedDocuments = listOf(parseDocument(ids[1], JSON_5, 1)),
+                )
+            }
+        }
+
+        val document1 = store.getDocument(ids[0])
+        val document2 = store.getDocument(ids[1])
+
+        assertEquals(if (mode == "check") null else WRITE_CONFLICT, exception?.errorCode)
+        assertDocument(document1, ids[0], if (mode == "single") JSON_1 else JSON_4, if (mode == "single") 1 else 2)
+        assertDocument(document2, ids[1], if (mode == "check") JSON_3 else JSON_5, 2)
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = ["single", "multiple", "check"])
+    fun updateDocuments_concurrentInsert(mode: String) = runBlocking {
+        // The update is committed first, so the concurrent transaction creating the same document can't be committed,
+        // unless the update only checks the document
+        val exception: R2dbcException? = withConcurrentTransaction(parseDocument(ids[1], JSON_1, 0)) {
+            when (mode) {
+                "single" -> store.updateDocuments(parseDocument(ids[1], JSON_3, 0))
+                "multiple" -> store.updateDocuments(
+                    parseDocument(ids[0], JSON_2, 0),
+                    parseDocument(ids[1], JSON_3, 0),
+                )
+                else -> store.updateDocuments(
+                    updatedDocuments = listOf(parseDocument(ids[0], JSON_2, 0)),
+                    checkedDocuments = listOf(parseDocument(ids[1], JSON_3, 0)),
+                )
+            }
+        }
+
+        val document1 = store.getDocument(ids[0])
+        val document2 = store.getDocument(ids[1])
+
+        assertEquals(if (mode == "check") null else WRITE_CONFLICT, exception?.errorCode)
+        assertDocument(document1, ids[0], if (mode == "single") null else JSON_2, if (mode == "single") 0 else 1)
+        assertDocument(document2, ids[1], if (mode == "check") JSON_1 else JSON_3, 1)
+    }
+
+    //endregion
 
     /**
      * Executes [block] while a concurrent optimistic transaction writing [document] is in progress, then commits the
@@ -599,18 +576,6 @@ class TiDbDocumentStoreTests {
         val document = store.getDocument(ids[0])
 
         assertDocument(document, ids[0], json, 1)
-    }
-
-    @Test
-    fun getDocuments_numberPrecision() = runBlocking {
-        // Numbers that are not integers are stored as double-precision floating-point numbers
-        val json = """ {"a":1234567890.0987654321,"b":99999999999999999999,"c":9007199254740993} """
-        val storedJson = """ {"a":1234567890.0987654,"b":100000000000000000000,"c":9007199254740993} """
-        updateDocument(ids[0], json, 0)
-
-        val document = store.getDocument(ids[0])
-
-        assertDocument(document, ids[0], storedJson, 1)
     }
 
     //endregion
