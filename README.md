@@ -33,7 +33,7 @@ CREATE TABLE documents (
 ) TTL = deleted + INTERVAL 0 DAY;
 ```
 
-- `partition_hash` holds the hash of the partition key, as computed by the `CRC32` function of TiDB. It is set by the database when a document is written.
+- `partition_hash` holds the hash of the partition key, which is the same as the `CRC32` function of TiDB computes. It is set by the store when a document is written.
 - `partition_key` and `sort_key` hold the partition key and the sort key, which are limited to 255 characters. The `utf8mb4_0900_bin` collation sorts keys by their UTF-8 encoding, and doesn't ignore trailing spaces.
 - `version` is an integer representing the version of the document, for optimistic concurrency management purposes.
 - `body` holds the JSON document. Since the body has its own column, there are no reserved field names.
@@ -322,13 +322,13 @@ An update of multiple documents (for example with `EntityStore.transaction`) is 
 
 An update of multiple documents therefore takes four round trips to the database in the most common case, where the documents exist and none of them is only checked.
 
-Updates are optimistic transactions: they don't lock the documents while they run, and conflicts are detected by TiDB when the transaction is committed. If any of the documents of an update, including the checked ones, has been written by another transaction since the update started, the commit fails and an `UpdateConflictException` is thrown. TiDB doesn't indicate which document caused that conflict, so the exception then refers to the first document of the update. Under contention, using a `RetryPolicy` with `transaction` retries the update with fresh versions of the documents.
+Updates are optimistic transactions: they don't lock the documents while they run, and conflicts are detected by TiDB when the transaction is committed. If any of the documents of an update, including the checked ones, has been written by another transaction since the update started, the commit fails and an `UpdateConflictException` is thrown. TiDB doesn't indicate which document caused that conflict, so the exception then refers to the first document of the update. The same applies when an updated document doesn't have its expected version, whereas the exception refers to the right document when a checked document doesn't. Under contention, using a `RetryPolicy` with `transaction` retries the update with fresh versions of the documents.
 
 An update never waits for another update of the store. It can however wait if one of its documents is locked for a long time by a transaction of another application, such as a pessimistic transaction left open.
 
 ### Prepared statements
 
-When TiDB receives a statement as text, it parses and plans it every time. Most of the statements of the store have the same text whatever their parameters (only the number of documents changes the text of the statements of an update of multiple documents), so they can be prepared on the server: TiDB then reuses the plan it cached for the statement, which lowers its CPU usage. Since the SQL layer of TiDB is often the first resource to run out under a write-heavy load, this can increase the throughput of the store.
+When TiDB receives a statement as text, it parses and plans it every time. Most of the statements of the store have the same text whatever their parameters (only the number of documents changes the text of the statements reading or updating multiple documents), so they can be prepared on the server: TiDB then reuses the plan it cached for the statement, which lowers its CPU usage. Since the SQL layer of TiDB is often the first resource to run out under a write-heavy load, this can increase the throughput of the store.
 
 With `r2dbc-mysql`, the connections have to be created with `useServerPrepareStatement`:
 
@@ -351,8 +351,8 @@ val connectionFactory: ConnectionFactory = ConnectionPool(
 ```
 
 - A prepared statement and its cached plan belong to a connection, so the connections have to be reused, which a pool does. With a connection created for each operation, preparing statements only adds a round trip.
-- TiDB doesn't cache the plans of the statements reading or writing several keys at once, which are used by the updates of multiple documents, unless `tidb_opt_fix_control` includes `44830:ON`. It is safe to enable with the store, which never sends the same key twice in a statement. Without it everything works, but the updates of multiple documents are planned every time.
-- The statements reading documents and updating a single document are cached without any setting.
+- TiDB doesn't cache the plans of the statements reading or writing several keys at once, which are used to read documents and to update multiple documents, unless `tidb_opt_fix_control` includes `44830:ON`. It is safe to enable with the store, which never sends the same key twice in a statement. Without it everything works, but these statements are planned every time.
+- The statements updating a single document are cached without any setting.
 
 ### Queries
 

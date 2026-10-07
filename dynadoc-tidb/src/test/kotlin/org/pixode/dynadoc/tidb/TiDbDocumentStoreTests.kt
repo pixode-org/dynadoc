@@ -400,7 +400,14 @@ class TiDbDocumentStoreTests {
     //region updateDocuments: Conflict (Multiple documents)
 
     @ParameterizedTest
-    @ValueSource(strings = ["updatedDoesNotExist", "checkedDoesNotExist", "checkedAlreadyExists"])
+    @ValueSource(
+        strings = [
+            "updatedDoesNotExist",
+            "updatedWrongVersion",
+            "checkedDoesNotExist",
+            "checkedAlreadyExists",
+        ],
+    )
     fun updateDocuments_multipleDocumentsConflict(mode: String) = runBlocking {
         updateDocument(ids[0], JSON_1, 0)
 
@@ -411,11 +418,16 @@ class TiDbDocumentStoreTests {
                     parseDocument(ids[1], JSON_3, 10),
                 )
 
+                "updatedWrongVersion" -> store.updateDocuments(
+                    parseDocument(ids[0], JSON_2, 2),
+                    parseDocument(ids[1], JSON_3, 0),
+                )
+
                 "checkedDoesNotExist" -> store.updateDocuments(
                     updatedDocuments = listOf(parseDocument(ids[0], JSON_2, 1)),
                     checkedDocuments = listOf(parseDocument(ids[1], JSON_3, 10)),
                 )
-                // The checked document is expected to be missing, the conflict is not on the first document
+
                 else -> store.updateDocuments(
                     updatedDocuments = listOf(parseDocument(ids[1], JSON_2, 0)),
                     checkedDocuments = listOf(parseDocument(ids[0], JSON_3, 0)),
@@ -428,7 +440,8 @@ class TiDbDocumentStoreTests {
 
         assertDocument(document1, ids[0], JSON_1, 1)
         assertDocument(document2, ids[1], null, 0)
-        assertEquals(if (mode.endsWith("DoesNotExist")) ids[1] else ids[0], exception.id)
+        // The conflict on an updated document is reported on the first document of the update
+        assertEquals(if (mode == "checkedDoesNotExist") ids[1] else ids[0], exception.id)
     }
 
     //endregion

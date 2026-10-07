@@ -43,8 +43,9 @@ private val conflictCodes: Set<Int> =
  * preserved, until they are removed by the TTL jobs of the database, once [expiration] has elapsed.
  *
  * A single document is updated by a single statement. Multiple documents are updated by a transaction made of a fixed
- * number of statements, whatever the number of documents: the transaction begins, reads the versions of the documents,
- * writes them all with a single statement, then commits. Statements with the same shape are executed many times, so
+ * number of statements, whatever the number of documents: the transaction begins, reads the versions of the checked
+ * documents, writes the new documents and the updated ones with a statement each, which checks the versions of the
+ * updated documents, then commits. Statements with the same shape are executed many times, so
  * that they can be prepared (see the README).
  *
  * Updates are optimistic transactions, which don't lock the documents: an update fails when it is committed if any
@@ -58,11 +59,9 @@ class TiDbDocumentStore(
 ) : DocumentStore {
     private val table = TiDbTable(tableName)
 
-    private val partitionFilter: String = "$PARTITION_HASH = CRC32(?) AND $PARTITION_KEY = ?"
-    private val keyFilter: String = "$partitionFilter AND $SORT_KEY = ?"
+    private val partitionFilter: String = "$PARTITION_HASH = ? AND $PARTITION_KEY = ?"
 
-    private val selectSql: String =
-        "SELECT $PARTITION_KEY, $SORT_KEY, $VERSION, CAST($BODY AS CHAR) AS $BODY FROM ${table.tableName}"
+    private val selectSql: String = table.selectSql
 
     //region updateDocuments
 
@@ -92,8 +91,8 @@ class TiDbDocumentStore(
                 withConnection { connection ->
                     val statement: Statement =
                         if (document.version == 0L) {
-                            connection.createStatement(table.insertSql)
-                                .bind(0, document.id.partitionKey)
+                            connection.createStatement(table.insertSql(1))
+                                .bind(0, partitionHash(document.id.partitionKey))
                                 .bind(1, document.id.partitionKey)
                                 .bind(2, document.id.sortKey)
                                 .bindNullable(3, body, String::class.java)
@@ -102,13 +101,13 @@ class TiDbDocumentStore(
                             connection.createStatement(table.updateSql)
                                 .bindNullable(0, body, String::class.java)
                                 .bindNullable(1, deleted, Long::class.javaObjectType)
-                                .bind(2, document.id.partitionKey)
+                                .bind(2, partitionHash(document.id.partitionKey))
                                 .bind(3, document.id.partitionKey)
                                 .bind(4, document.id.sortKey)
                                 .bind(5, document.version)
                         }
 
-                    statement.rowsUpdated().sum()
+                    statement.rowsUpdated()
                 }
             } catch (exception: R2dbcException) {
                 // The document has been created or written by a concurrent transaction
@@ -124,42 +123,56 @@ class TiDbDocumentStore(
         }
     }
 
-    private suspend fun updateMultipleDocuments(updatedList: List<Document>, checkedList: List<Document>) {
-        val documents: List<Document> = updatedList + checkedList
+    private suspend fun updateMultipleDocuments(updatedDocuments: List<Document>, checkedDocuments: List<Document>) {
+        val (created, updated) = updatedDocuments.partition { it.version == 0L }
 
         // A checked document that doesn't exist is written then deleted, so that a concurrent insert of the same
         // document causes a conflict
-        val missingList: List<Document> = checkedList.filter { it.version == 0L }
-        val written: List<Pair<Document, String?>> =
-            updatedList.map { it to fromBody(it.body) } + missingList.map { it to null }
+        val deleted: List<Document> = checkedDocuments.filter { it.version == 0L }
 
         withConnection { connection ->
             try {
                 connection.createStatement("BEGIN OPTIMISTIC").rowsUpdated()
 
-                // Reading the documents for update makes the commit fail if a concurrent transaction writes any
-                // of them, including the documents that are only checked
-                val versions: Map<DocumentKey, Long> = connection.createStatement(table.selectVersionsSql(documents.size))
-                    .apply { bindKeys(documents.map { it.id }) }
-                    .execute()
-                    .awaitSingle()
-                    .map { row -> RowMapper.toDocumentKey(row) to RowMapper.toVersion(row) }
-                    .asFlow()
-                    .fold(HashMap()) { versions, (id, version) -> versions.also { it[id] = version } }
+                if (checkedDocuments.isNotEmpty()) {
+                    // Reading the documents for update makes the commit fail if a concurrent transaction writes any
+                    // of them, including the documents that are only checked
+                    val versions: Map<DocumentKey, Long> =
+                        connection.createStatement(table.selectVersionsSql(checkedDocuments.size))
+                            .apply { bindKeys(checkedDocuments.map { it.id }) }
+                            .readVersions()
 
-                documents.firstOrNull { (versions[it.id] ?: 0) != it.version }?.let { conflict ->
-                    throw UpdateConflictException(conflict.id)
+                    checkedDocuments.firstOrNull { (versions[it.id] ?: 0) != it.version }?.let { conflict ->
+                        throw UpdateConflictException(conflict.id)
+                    }
                 }
 
-                if (written.isNotEmpty()) {
-                    connection.createStatement(table.upsertSql(written.size))
-                        .apply { bindWrittenDocuments(written) }
+                if (created.isNotEmpty()) {
+                    connection.createStatement(table.insertSql(created.size))
+                        .apply { bindCreatedDocuments(created) }
                         .rowsUpdated()
                 }
 
-                if (missingList.isNotEmpty()) {
-                    connection.createStatement(table.deleteSql(missingList.size))
-                        .apply { bindKeys(missingList.map { it.id }) }
+                // The versions of the updated documents are checked by the statement writing them, rather than by
+                // reading them first. An updated document counts for 2 rows, whereas a document that doesn't have
+                // its expected version counts for fewer
+                if (updated.isNotEmpty()) {
+                    val rowsUpdated: Long = connection.createStatement(table.conditionalUpsertSql(updated.size))
+                        .apply { bindWrittenDocuments(updated.map { it to fromBody(it.body) }) }
+                        .rowsUpdated()
+
+                    if (rowsUpdated != 2L * updated.size) {
+                        throw UpdateConflictException(updatedDocuments[0].id)
+                    }
+                }
+
+                if (deleted.isNotEmpty()) {
+                    connection.createStatement(table.upsertSql(deleted.size))
+                        .apply { bindWrittenDocuments(deleted.map { it to null }) }
+                        .rowsUpdated()
+
+                    connection.createStatement(table.deleteSql(deleted.size))
+                        .apply { bindKeys(deleted.map { it.id }) }
                         .rowsUpdated()
                 }
 
@@ -172,11 +185,33 @@ class TiDbDocumentStore(
 
                 // The conflict has been detected by the database rather than by the store
                 if (exception is R2dbcException && exception.errorCode in conflictCodes) {
-                    throw UpdateConflictException(documents[0].id)
+                    throw UpdateConflictException((updatedDocuments + checkedDocuments)[0].id)
                 } else {
                     throw exception
                 }
             }
+        }
+    }
+
+    private suspend fun Statement.readVersions(): Map<DocumentKey, Long> = execute()
+        .awaitSingle()
+        .map { row -> RowMapper.toDocumentKey(row) to RowMapper.toVersion(row) }
+        .asFlow()
+        .fold(HashMap()) { versions, (id, version) -> versions.also { it[id] = version } }
+
+    private fun Statement.bindCreatedDocuments(documents: List<Document>) {
+        // The time from which the documents can be removed if they are deleted
+        val deleted: Long = expirationTime()
+        var index = 0
+
+        for ((id, jsonBody) in documents) {
+            val body: String? = fromBody(jsonBody)
+
+            bind(index++, partitionHash(id.partitionKey))
+            bind(index++, id.partitionKey)
+            bind(index++, id.sortKey)
+            bindNullable(index++, body, String::class.java)
+            bindNullable(index++, if (body == null) deleted else null, Long::class.javaObjectType)
         }
     }
 
@@ -186,7 +221,7 @@ class TiDbDocumentStore(
         var index = 0
 
         for ((document, body) in written) {
-            bind(index++, document.id.partitionKey)
+            bind(index++, partitionHash(document.id.partitionKey))
             bind(index++, document.id.partitionKey)
             bind(index++, document.id.sortKey)
             bind(index++, document.version + 1)
@@ -223,7 +258,7 @@ class TiDbDocumentStore(
         val distinctIds: List<DocumentKey> = idList.distinct()
 
         val documents: Map<DocumentKey, Document> = withConnection { connection ->
-            connection.createStatement(selectKeysSql(distinctIds.size))
+            connection.createStatement(table.selectDocumentsSql(distinctIds.size))
                 .apply { bindKeys(distinctIds) }
                 .asDocuments()
                 .toList()
@@ -235,14 +270,9 @@ class TiDbDocumentStore(
         }
     }
 
-    // Each row is read directly using an equality on the whole primary key, whereas a single condition matching all
-    // the keys can result in the whole table being read
-    private fun selectKeysSql(count: Int): String =
-        (0 until count).joinToString(" UNION ALL ") { "$selectSql WHERE $keyFilter" }
-
     private fun Statement.bindKeys(ids: List<DocumentKey>) {
         ids.forEachIndexed { index, id ->
-            bind(index * 3, id.partitionKey)
+            bind(index * 3, partitionHash(id.partitionKey))
             bind(index * 3 + 1, id.partitionKey)
             bind(index * 3 + 2, id.sortKey)
         }
@@ -261,7 +291,7 @@ class TiDbDocumentStore(
         val range: String = if (endSortKey == null) "" else " AND $SORT_KEY < ?"
 
         return select("$partitionFilter AND $SORT_KEY >= ?$range ORDER BY $SORT_KEY") {
-            bind(0, partitionKey).bind(1, partitionKey).bind(2, startSortKey)
+            bind(0, partitionHash(partitionKey)).bind(1, partitionKey).bind(2, startSortKey)
 
             if (endSortKey != null) {
                 bind(3, endSortKey)
@@ -322,8 +352,10 @@ class TiDbDocumentStore(
         }
     }
 
-    private suspend fun Statement.rowsUpdated(): List<Long> =
-        execute().asFlow().map { result -> result.rowsUpdated.awaitFirstOrNull() ?: 0L }.toList()
+    private suspend fun Statement.rowsUpdated(): Long = execute()
+        .asFlow()
+        .map { result -> result.rowsUpdated.awaitFirstOrNull() ?: 0L }
+        .fold(0L) { sum, count -> sum + count }
 
     private fun Statement.asDocuments(): Flow<Document> = flow {
         execute().asFlow().collect { result ->

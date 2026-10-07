@@ -257,10 +257,12 @@ class DynamoDbDocumentStoreTests {
                     parseDocument(ids[0], JSON_3, 1),
                     parseDocument(ids[0], JSON_4, 1),
                 )
+
                 "checkedTwice" -> store.updateDocuments(
                     updatedDocuments = listOf(parseDocument(ids[1], JSON_2, 0)),
                     checkedDocuments = listOf(parseDocument(ids[0], JSON_3, 1), parseDocument(ids[0], JSON_4, 1)),
                 )
+
                 else -> store.updateDocuments(
                     updatedDocuments = listOf(parseDocument(ids[1], JSON_2, 0), parseDocument(ids[0], JSON_3, 1)),
                     checkedDocuments = listOf(parseDocument(ids[0], JSON_4, 1)),
@@ -379,7 +381,14 @@ class DynamoDbDocumentStoreTests {
     //region updateDocuments: Conflict (Multiple documents)
 
     @ParameterizedTest
-    @ValueSource(strings = ["updatedDoesNotExist", "checkedDoesNotExist", "checkedAlreadyExists"])
+    @ValueSource(
+        strings = [
+            "updatedDoesNotExist",
+            "updatedWrongVersion",
+            "checkedDoesNotExist",
+            "checkedAlreadyExists",
+        ],
+    )
     fun updateDocuments_multipleDocumentsConflict(mode: String) = runBlocking {
         updateDocument(ids[0], JSON_1, 0)
 
@@ -389,11 +398,17 @@ class DynamoDbDocumentStoreTests {
                     parseDocument(ids[0], JSON_2, 1),
                     parseDocument(ids[1], JSON_3, 10),
                 )
+
+                "updatedWrongVersion" -> store.updateDocuments(
+                    parseDocument(ids[0], JSON_2, 2),
+                    parseDocument(ids[1], JSON_3, 0),
+                )
+
                 "checkedDoesNotExist" -> store.updateDocuments(
                     updatedDocuments = listOf(parseDocument(ids[0], JSON_2, 1)),
                     checkedDocuments = listOf(parseDocument(ids[1], JSON_3, 10)),
                 )
-                // The checked document is expected to be missing, the conflict is not on the first document
+
                 else -> store.updateDocuments(
                     updatedDocuments = listOf(parseDocument(ids[1], JSON_2, 0)),
                     checkedDocuments = listOf(parseDocument(ids[0], JSON_3, 0)),
