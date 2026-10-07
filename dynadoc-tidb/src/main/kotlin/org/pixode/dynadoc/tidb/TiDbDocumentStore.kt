@@ -43,9 +43,8 @@ private val conflictCodes: Set<Int> =
  * preserved, until they are removed by the TTL jobs of the database, once [expiration] has elapsed.
  *
  * A single document is updated by a single statement. Multiple documents are updated by a transaction made of a fixed
- * number of statements, whatever the number of documents: the transaction begins, reads the versions of the checked
- * documents, writes the new documents and the updated ones with a statement each, which checks the versions of the
- * updated documents, then commits. Statements with the same shape are executed many times, so
+ * number of statements, whatever the number of documents: the transaction begins, reads the versions of the documents,
+ * writes them all with a single statement, then commits. Statements with the same shape are executed many times, so
  * that they can be prepared (see the README).
  *
  * Updates are optimistic transactions, which don't lock the documents: an update fails when it is committed if any
@@ -91,7 +90,7 @@ class TiDbDocumentStore(
                 withConnection { connection ->
                     val statement: Statement =
                         if (document.version == 0L) {
-                            connection.createStatement(table.insertSql(1))
+                            connection.createStatement(table.insertSql)
                                 .bind(0, partitionHash(document.id.partitionKey))
                                 .bind(1, document.id.partitionKey)
                                 .bind(2, document.id.sortKey)
@@ -124,55 +123,38 @@ class TiDbDocumentStore(
     }
 
     private suspend fun updateMultipleDocuments(updatedDocuments: List<Document>, checkedDocuments: List<Document>) {
-        val (created, updated) = updatedDocuments.partition { it.version == 0L }
+        val documents: List<Document> = updatedDocuments + checkedDocuments
 
         // A checked document that doesn't exist is written then deleted, so that a concurrent insert of the same
         // document causes a conflict
-        val deleted: List<Document> = checkedDocuments.filter { it.version == 0L }
+        val documentsToDelete: List<Document> = checkedDocuments.filter { it.version == 0L }
+        val documentsToUpsert: List<Pair<Document, String?>> =
+            updatedDocuments.map { it to fromBody(it.body) } + documentsToDelete.map { it to null }
 
         withConnection { connection ->
             try {
                 connection.createStatement("BEGIN OPTIMISTIC").rowsUpdated()
 
-                if (checkedDocuments.isNotEmpty()) {
-                    // Reading the documents for update makes the commit fail if a concurrent transaction writes any
-                    // of them, including the documents that are only checked
-                    val versions: Map<DocumentKey, Long> =
-                        connection.createStatement(table.selectVersionsSql(checkedDocuments.size))
-                            .apply { bindKeys(checkedDocuments.map { it.id }) }
-                            .readVersions()
+                // Reading the documents for update makes the commit fail if a concurrent transaction writes any
+                // of them, including the documents that are only checked
+                val versions: Map<DocumentKey, Long> =
+                    connection.createStatement(table.selectVersionsSql(documents.size))
+                        .apply { bindKeys(documents.map { it.id }) }
+                        .readVersions()
 
-                    checkedDocuments.firstOrNull { (versions[it.id] ?: 0) != it.version }?.let { conflict ->
-                        throw UpdateConflictException(conflict.id)
-                    }
+                documents.firstOrNull { (versions[it.id] ?: 0) != it.version }?.let { conflict ->
+                    throw UpdateConflictException(conflict.id)
                 }
 
-                if (created.isNotEmpty()) {
-                    connection.createStatement(table.insertSql(created.size))
-                        .apply { bindCreatedDocuments(created) }
+                if (documentsToUpsert.isNotEmpty()) {
+                    connection.createStatement(table.upsertSql(documentsToUpsert.size))
+                        .apply { bindUpsertDocuments(documentsToUpsert) }
                         .rowsUpdated()
                 }
 
-                // The versions of the updated documents are checked by the statement writing them, rather than by
-                // reading them first. An updated document counts for 2 rows, whereas a document that doesn't have
-                // its expected version counts for fewer
-                if (updated.isNotEmpty()) {
-                    val rowsUpdated: Long = connection.createStatement(table.conditionalUpsertSql(updated.size))
-                        .apply { bindWrittenDocuments(updated.map { it to fromBody(it.body) }) }
-                        .rowsUpdated()
-
-                    if (rowsUpdated != 2L * updated.size) {
-                        throw UpdateConflictException(updatedDocuments[0].id)
-                    }
-                }
-
-                if (deleted.isNotEmpty()) {
-                    connection.createStatement(table.upsertSql(deleted.size))
-                        .apply { bindWrittenDocuments(deleted.map { it to null }) }
-                        .rowsUpdated()
-
-                    connection.createStatement(table.deleteSql(deleted.size))
-                        .apply { bindKeys(deleted.map { it.id }) }
+                if (documentsToDelete.isNotEmpty()) {
+                    connection.createStatement(table.deleteSql(documentsToDelete.size))
+                        .apply { bindKeys(documentsToDelete.map { it.id }) }
                         .rowsUpdated()
                 }
 
@@ -185,9 +167,7 @@ class TiDbDocumentStore(
 
                 // The conflict has been detected by the database rather than by the store
                 if (exception is R2dbcException && exception.errorCode in conflictCodes) {
-                    throw UpdateConflictException(
-                        id = (updatedDocuments.asSequence() + checkedDocuments.asSequence()).first().id
-                    )
+                    throw UpdateConflictException(documents[0].id)
                 } else {
                     throw exception
                 }
@@ -201,23 +181,7 @@ class TiDbDocumentStore(
         .asFlow()
         .fold(HashMap()) { versions, (id, version) -> versions.also { it[id] = version } }
 
-    private fun Statement.bindCreatedDocuments(documents: List<Document>) {
-        // The time from which the documents can be removed if they are deleted
-        val deleted: Long = expirationTime()
-        var index = 0
-
-        for ((id, jsonBody) in documents) {
-            val body: String? = fromBody(jsonBody)
-
-            bind(index++, partitionHash(id.partitionKey))
-            bind(index++, id.partitionKey)
-            bind(index++, id.sortKey)
-            bindNullable(index++, body, String::class.java)
-            bindNullable(index++, if (body == null) deleted else null, Long::class.javaObjectType)
-        }
-    }
-
-    private fun Statement.bindWrittenDocuments(written: List<Pair<Document, String?>>) {
+    private fun Statement.bindUpsertDocuments(written: List<Pair<Document, String?>>) {
         // The time from which the documents can be removed if they are deleted
         val deleted: Long = expirationTime()
         var index = 0

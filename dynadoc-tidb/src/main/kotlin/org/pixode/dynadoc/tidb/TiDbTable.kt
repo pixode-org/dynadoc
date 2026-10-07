@@ -13,11 +13,9 @@ class TiDbTable(table: String) {
     // The collation sorts the keys by their UTF-8 encoding, without ignoring trailing spaces
     private val keyType: String = "VARCHAR($MAX_KEY_LENGTH) CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_bin NOT NULL"
 
-    private val cachedInsertSql = cached(::createInsertSql)
     private val cachedSelectDocumentsSql = cached(::createSelectDocumentsSql)
     private val cachedSelectVersionsSql = cached(::createSelectVersionsSql)
     private val cachedUpsertSql = cached(::createUpsertSql)
-    private val cachedConditionalUpsertSql = cached(::createConditionalUpsertSql)
     private val cachedDeleteSql = cached(::createDeleteSql)
 
     /**
@@ -47,15 +45,13 @@ class TiDbTable(table: String) {
     """.trimIndent()
 
     /**
-     * Returns the statement creating the given number of documents, which fails if any of them already exists. Its
-     * parameters are, for each document, the partition hash, the partition key, the sort key, the body, and the
-     * time, in seconds since the epoch, from which the document can be removed if it is deleted.
+     * Returns the statement creating a document, which fails if the document already exists. Its parameters are the
+     * partition hash, the partition key, the sort key, the body, and the time, in seconds since the epoch, from which
+     * the document can be removed if it is deleted.
      */
-    fun insertSql(count: Int): String = cachedInsertSql(count)
-
-    private fun createInsertSql(count: Int): String = """
+    val insertSql: String = """
         INSERT INTO $tableName ($PARTITION_HASH, $PARTITION_KEY, $SORT_KEY, $VERSION, $BODY, $DELETED)
-        VALUES ${rows("(?, ?, ?, 1, ?, FROM_UNIXTIME(?))", count)}
+        VALUES (?, ?, ?, 1, ?, FROM_UNIXTIME(?))
     """.trimIndent()
 
     /**
@@ -104,26 +100,6 @@ class TiDbTable(table: String) {
         INSERT INTO $tableName ($PARTITION_HASH, $PARTITION_KEY, $SORT_KEY, $VERSION, $BODY, $DELETED)
         VALUES ${rows("(?, ?, ?, ? + 1, ?, FROM_UNIXTIME(?))", count)}
         ON DUPLICATE KEY UPDATE $VERSION = VALUES($VERSION), $BODY = VALUES($BODY), $DELETED = VALUES($DELETED)
-    """.trimIndent()
-
-    /**
-     * Returns the statement updating the given number of documents, which doesn't change a document if it doesn't
-     * have the given current version. It has the same parameters as [upsertSql].
-     *
-     * An existing document that is updated counts for 2 rows. A document that doesn't have the expected version
-     * counts for fewer rows, or is created if it doesn't exist, which counts for 1 row, so the documents have all been
-     * updated if the number of rows is twice the number of documents. The statement must not be used to create
-     * documents. The version is assigned last, so that the other columns are assigned using the previous version.
-     */
-    fun conditionalUpsertSql(count: Int): String = cachedConditionalUpsertSql(count)
-
-    private fun createConditionalUpsertSql(count: Int) = """
-        INSERT INTO $tableName ($PARTITION_HASH, $PARTITION_KEY, $SORT_KEY, $VERSION, $BODY, $DELETED)
-        VALUES ${rows("(?, ?, ?, ?, ?, FROM_UNIXTIME(?))", count)}
-        ON DUPLICATE KEY UPDATE
-            $BODY = IF($VERSION = VALUES($VERSION), VALUES($BODY), $BODY),
-            $DELETED = IF($VERSION = VALUES($VERSION), VALUES($DELETED), $DELETED),
-            $VERSION = IF($VERSION = VALUES($VERSION), VALUES($VERSION) + 1, $VERSION)
     """.trimIndent()
 
     /**

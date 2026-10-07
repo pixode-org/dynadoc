@@ -440,8 +440,7 @@ class TiDbDocumentStoreTests {
 
         assertDocument(document1, ids[0], JSON_1, 1)
         assertDocument(document2, ids[1], null, 0)
-        // The conflict on an updated document is reported on the first document of the update
-        assertEquals(if (mode == "checkedDoesNotExist") ids[1] else ids[0], exception.id)
+        assertEquals(if (mode.endsWith("DoesNotExist")) ids[1] else ids[0], exception.id)
     }
 
     //endregion
