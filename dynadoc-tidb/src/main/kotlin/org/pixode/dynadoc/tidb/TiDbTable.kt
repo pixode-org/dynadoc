@@ -9,13 +9,6 @@ private const val CACHED_COUNT = 10
 
 private const val UPSERT_ROW = "(?, ?, ?, ?, ?, FROM_UNIXTIME(?))"
 
-/**
- * Returns the value of the `partition_hash` column for the given partition key, which is the same as the `CRC32`
- * function of TiDB. It is passed to the statements as a parameter rather than computed by the database, because TiDB
- * doesn't cache the plans of the statements reading several documents when the hash is computed from a parameter.
- */
-fun partitionHash(partitionKey: String): Long = CRC32().apply { update(partitionKey.toByteArray()) }.value
-
 class TiDbTable(table: String) {
     val tableName: String = table.split('.').joinToString(".", transform = ::quoteIdentifier)
 
@@ -158,4 +151,14 @@ class TiDbTable(table: String) {
     }
 
     private fun quoteIdentifier(identifier: String): String = "`${identifier.replace("`", "``")}`"
+}
+
+/**
+ * Returns the value of the `partition_hash` column for the given partition key, which is the same as the `CRC32`
+ * function of TiDB. It is passed to the statements as a parameter rather than computed by the database, because TiDB
+ * doesn't cache the plans of the statements reading several documents when the hash is computed from a parameter.
+ */
+fun partitionHash(partitionKey: String): Long {
+    val bytes: ByteArray = partitionKey.toByteArray()
+    return CRC32().apply { update(bytes, 0, bytes.size) }.value
 }
