@@ -185,7 +185,9 @@ class TiDbDocumentStore(
 
                 // The conflict has been detected by the database rather than by the store
                 if (exception is R2dbcException && exception.errorCode in conflictCodes) {
-                    throw UpdateConflictException((updatedDocuments + checkedDocuments)[0].id)
+                    throw UpdateConflictException(
+                        id = (updatedDocuments.asSequence() + checkedDocuments.asSequence()).first().id
+                    )
                 } else {
                     throw exception
                 }
@@ -224,7 +226,7 @@ class TiDbDocumentStore(
             bind(index++, partitionHash(document.id.partitionKey))
             bind(index++, document.id.partitionKey)
             bind(index++, document.id.sortKey)
-            bind(index++, document.version + 1)
+            bind(index++, document.version)
             bindNullable(index++, body, String::class.java)
             bindNullable(index++, if (body == null) deleted else null, Long::class.javaObjectType)
         }
@@ -271,10 +273,12 @@ class TiDbDocumentStore(
     }
 
     private fun Statement.bindKeys(ids: List<DocumentKey>) {
-        ids.forEachIndexed { index, id ->
-            bind(index * 3, partitionHash(id.partitionKey))
-            bind(index * 3 + 1, id.partitionKey)
-            bind(index * 3 + 2, id.sortKey)
+        var index = 0
+
+        for (id in ids) {
+            bind(index++, partitionHash(id.partitionKey))
+            bind(index++, id.partitionKey)
+            bind(index++, id.sortKey)
         }
     }
 

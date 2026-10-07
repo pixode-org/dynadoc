@@ -7,20 +7,18 @@ const val MAX_KEY_LENGTH = 255
 // The statements reading and writing up to 9 documents are created once
 private const val CACHED_COUNT = 10
 
-private const val UPSERT_ROW = "(?, ?, ?, ?, ?, FROM_UNIXTIME(?))"
-
 class TiDbTable(table: String) {
     val tableName: String = table.split('.').joinToString(".", transform = ::quoteIdentifier)
 
     // The collation sorts the keys by their UTF-8 encoding, without ignoring trailing spaces
     private val keyType: String = "VARCHAR($MAX_KEY_LENGTH) CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_bin NOT NULL"
 
-    private val cachedInsertSql: (Int) -> String = cached(::createInsertSql)
-    private val cachedSelectDocumentsSql: (Int) -> String = cached(::createSelectDocumentsSql)
-    private val cachedSelectVersionsSql: (Int) -> String = cached(::createSelectVersionsSql)
-    private val cachedUpsertSql: (Int) -> String = cached(::createUpsertSql)
-    private val cachedConditionalUpsertSql: (Int) -> String = cached(::createConditionalUpsertSql)
-    private val cachedDeleteSql: (Int) -> String = cached(::createDeleteSql)
+    private val cachedInsertSql = cached(::createInsertSql)
+    private val cachedSelectDocumentsSql = cached(::createSelectDocumentsSql)
+    private val cachedSelectVersionsSql = cached(::createSelectVersionsSql)
+    private val cachedUpsertSql = cached(::createUpsertSql)
+    private val cachedConditionalUpsertSql = cached(::createConditionalUpsertSql)
+    private val cachedDeleteSql = cached(::createDeleteSql)
 
     /**
      * The statement reading the documents, to which a condition is appended.
@@ -57,7 +55,7 @@ class TiDbTable(table: String) {
 
     private fun createInsertSql(count: Int): String = """
         INSERT INTO $tableName ($PARTITION_HASH, $PARTITION_KEY, $SORT_KEY, $VERSION, $BODY, $DELETED)
-        VALUES ${(0 until count).joinToString { "(?, ?, ?, 1, ?, FROM_UNIXTIME(?))" }}
+        VALUES ${rows("(?, ?, ?, 1, ?, FROM_UNIXTIME(?))", count)}
     """.trimIndent()
 
     /**
@@ -95,7 +93,7 @@ class TiDbTable(table: String) {
 
     /**
      * Returns the statement writing the given number of documents, which are created if they don't exist. Its
-     * parameters are, for each document, the partition hash, the partition key, the sort key, the new version, the
+     * parameters are, for each document, the partition hash, the partition key, the sort key, the current version, the
      * new body, and the time, in seconds since the epoch, from which the document can be removed if it is deleted.
      *
      * The versions of the documents must have been checked before the statement is executed.
@@ -104,13 +102,13 @@ class TiDbTable(table: String) {
 
     private fun createUpsertSql(count: Int): String = """
         INSERT INTO $tableName ($PARTITION_HASH, $PARTITION_KEY, $SORT_KEY, $VERSION, $BODY, $DELETED)
-        VALUES ${(0 until count).joinToString { UPSERT_ROW }}
+        VALUES ${rows("(?, ?, ?, ? + 1, ?, FROM_UNIXTIME(?))", count)}
         ON DUPLICATE KEY UPDATE $VERSION = VALUES($VERSION), $BODY = VALUES($BODY), $DELETED = VALUES($DELETED)
     """.trimIndent()
 
     /**
      * Returns the statement updating the given number of documents, which doesn't change a document if it doesn't
-     * have the version before the new version. It has the same parameters as [upsertSql].
+     * have the given current version. It has the same parameters as [upsertSql].
      *
      * An existing document that is updated counts for 2 rows. A document that doesn't have the expected version
      * counts for fewer rows, or is created if it doesn't exist, which counts for 1 row, so the documents have all been
@@ -119,18 +117,14 @@ class TiDbTable(table: String) {
      */
     fun conditionalUpsertSql(count: Int): String = cachedConditionalUpsertSql(count)
 
-    private fun createConditionalUpsertSql(count: Int): String {
-        val expected = "$VERSION = VALUES($VERSION) - 1"
-
-        return """
-            INSERT INTO $tableName ($PARTITION_HASH, $PARTITION_KEY, $SORT_KEY, $VERSION, $BODY, $DELETED)
-            VALUES ${(0 until count).joinToString { UPSERT_ROW }}
-            ON DUPLICATE KEY UPDATE
-                $BODY = IF($expected, VALUES($BODY), $BODY),
-                $DELETED = IF($expected, VALUES($DELETED), $DELETED),
-                $VERSION = IF($expected, VALUES($VERSION), $VERSION)
-        """.trimIndent()
-    }
+    private fun createConditionalUpsertSql(count: Int) = """
+        INSERT INTO $tableName ($PARTITION_HASH, $PARTITION_KEY, $SORT_KEY, $VERSION, $BODY, $DELETED)
+        VALUES ${rows("(?, ?, ?, ?, ?, FROM_UNIXTIME(?))", count)}
+        ON DUPLICATE KEY UPDATE
+            $BODY = IF($VERSION = VALUES($VERSION), VALUES($BODY), $BODY),
+            $DELETED = IF($VERSION = VALUES($VERSION), VALUES($DELETED), $DELETED),
+            $VERSION = IF($VERSION = VALUES($VERSION), VALUES($VERSION) + 1, $VERSION)
+    """.trimIndent()
 
     /**
      * Returns the statement deleting the given number of documents. The parameters of the statement are, for each
@@ -142,7 +136,10 @@ class TiDbTable(table: String) {
         DELETE FROM $tableName WHERE ($PARTITION_HASH, $PARTITION_KEY, $SORT_KEY) IN (${keyTuples(count)})
     """.trimIndent()
 
-    private fun keyTuples(count: Int): String = (0 until count).joinToString { "(?, ?, ?)" }
+    private fun keyTuples(count: Int): String = rows("(?, ?, ?)", count)
+
+    // The rows of a statement are separated by commas
+    private fun rows(row: String, count: Int): String = generateSequence { row }.take(count).joinToString()
 
     private fun cached(create: (Int) -> String): (Int) -> String {
         val statements: List<Lazy<String>> = List(CACHED_COUNT) { count -> lazy { create(count) } }
