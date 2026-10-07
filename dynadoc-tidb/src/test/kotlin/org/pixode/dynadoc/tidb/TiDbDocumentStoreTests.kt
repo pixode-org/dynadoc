@@ -448,52 +448,42 @@ class TiDbDocumentStoreTests {
     //region updateDocuments: Concurrent transactions
 
     @ParameterizedTest
-    @ValueSource(strings = ["single", "multiple", "check"])
+    @ValueSource(strings = ["single", "multiple"])
     fun updateDocuments_concurrentUpdate(mode: String) = runBlocking {
         updateDocument(ids[0], JSON_1, 0)
         updateDocument(ids[1], JSON_2, 0)
 
-        // The update is committed first, so the concurrent transaction writing the same document can't be committed,
-        // unless the update only checks the document
+        // The update is committed first, so the concurrent transaction writing the same document can't be committed
         val exception: R2dbcException? = withConcurrentTransaction(parseDocument(ids[1], JSON_3, 1)) {
             when (mode) {
                 "single" -> store.updateDocuments(parseDocument(ids[1], JSON_5, 1))
-                "multiple" -> store.updateDocuments(
+
+                else -> store.updateDocuments(
                     parseDocument(ids[0], JSON_4, 1),
                     parseDocument(ids[1], JSON_5, 1),
                 )
-
-                else -> store.updateDocuments(
-                    updatedDocuments = listOf(parseDocument(ids[0], JSON_4, 1)),
-                    checkedDocuments = listOf(parseDocument(ids[1], JSON_5, 1)),
-                )
             }
         }
 
         val document1 = store.getDocument(ids[0])
         val document2 = store.getDocument(ids[1])
 
-        assertEquals(if (mode == "check") null else WRITE_CONFLICT, exception?.errorCode)
+        assertEquals(WRITE_CONFLICT, exception?.errorCode)
         assertDocument(document1, ids[0], if (mode == "single") JSON_1 else JSON_4, if (mode == "single") 1 else 2)
-        assertDocument(document2, ids[1], if (mode == "check") JSON_3 else JSON_5, 2)
+        assertDocument(document2, ids[1], JSON_5, 2)
     }
 
     @ParameterizedTest
-    @ValueSource(strings = ["single", "multiple", "check"])
+    @ValueSource(strings = ["single", "multiple"])
     fun updateDocuments_concurrentInsert(mode: String) = runBlocking {
-        // The update is committed first, so the concurrent transaction creating the same document can't be committed,
-        // unless the update only checks the document
+        // The update is committed first, so the concurrent transaction creating the same document can't be committed
         val exception: R2dbcException? = withConcurrentTransaction(parseDocument(ids[1], JSON_1, 0)) {
             when (mode) {
                 "single" -> store.updateDocuments(parseDocument(ids[1], JSON_3, 0))
-                "multiple" -> store.updateDocuments(
-                    parseDocument(ids[0], JSON_2, 0),
-                    parseDocument(ids[1], JSON_3, 0),
-                )
 
                 else -> store.updateDocuments(
-                    updatedDocuments = listOf(parseDocument(ids[0], JSON_2, 0)),
-                    checkedDocuments = listOf(parseDocument(ids[1], JSON_3, 0)),
+                    parseDocument(ids[0], JSON_2, 0),
+                    parseDocument(ids[1], JSON_3, 0),
                 )
             }
         }
@@ -501,9 +491,9 @@ class TiDbDocumentStoreTests {
         val document1 = store.getDocument(ids[0])
         val document2 = store.getDocument(ids[1])
 
-        assertEquals(if (mode == "check") null else WRITE_CONFLICT, exception?.errorCode)
+        assertEquals(WRITE_CONFLICT, exception?.errorCode)
         assertDocument(document1, ids[0], if (mode == "single") null else JSON_2, if (mode == "single") 0 else 1)
-        assertDocument(document2, ids[1], if (mode == "check") JSON_1 else JSON_3, 1)
+        assertDocument(document2, ids[1], JSON_3, 1)
     }
 
     @ParameterizedTest

@@ -351,8 +351,9 @@ val connectionFactory: ConnectionFactory = ConnectionPool(
 ```
 
 - A prepared statement and its cached plan belong to a connection, so the connections have to be reused, which a pool does. With a connection created for each operation, preparing statements only adds a round trip.
-- TiDB doesn't cache the plans of the statements reading or writing several keys at once, which are used to read documents and to update multiple documents, unless `tidb_opt_fix_control` includes `44830:ON`. It is safe to enable with the store, which never sends the same key twice in a statement. Without it everything works, but these statements are planned every time.
-- The statements updating a single document are cached without any setting.
+- TiDB doesn't cache the plans of the statement reading several documents at once, which is used by `getDocuments`, unless `tidb_opt_fix_control` includes `44830:ON`. It is safe to enable with the store, which never sends the same key twice in a statement. Without it everything works, but `getDocuments` is planned every time when it reads more than one document.
+- The other statements are cached without any setting: the ones updating a single document, and the ones used by the updates of multiple documents.
+- TiDB doesn't cache the plan of a statement writing more than 33 documents, nor the plans of statements with a very large number of parameters, such as reading several hundred documents at once. They work, but are planned every time.
 
 ### Queries
 

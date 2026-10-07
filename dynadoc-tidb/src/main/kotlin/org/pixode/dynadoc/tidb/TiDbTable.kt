@@ -16,7 +16,6 @@ class TiDbTable(table: String) {
     private val cachedSelectDocumentsSql = cached(::createSelectDocumentsSql)
     private val cachedSelectVersionsSql = cached(::createSelectVersionsSql)
     private val cachedUpsertSql = cached(::createUpsertSql)
-    private val cachedDeleteSql = cached(::createDeleteSql)
 
     /**
      * The statement reading the documents, to which a condition is appended.
@@ -76,7 +75,9 @@ class TiDbTable(table: String) {
     /**
      * Returns the statement reading the key and the version of the given number of documents, which exist, within a
      * transaction. In an optimistic transaction, reading the documents for update doesn't lock them, but makes the
-     * commit fail if any of them has been written by a concurrent transaction since the transaction began.
+     * commit fail if any of them has been written by a concurrent transaction since the transaction began. This
+     * includes the documents that don't exist, as long as each document is read by its primary key, which is the
+     * case with this statement.
      *
      * The parameters of the statement are, for each document, the partition hash, the partition key and the sort key.
      */
@@ -100,16 +101,6 @@ class TiDbTable(table: String) {
         INSERT INTO $tableName ($PARTITION_HASH, $PARTITION_KEY, $SORT_KEY, $VERSION, $BODY, $DELETED)
         VALUES ${rows("(?, ?, ?, ? + 1, ?, FROM_UNIXTIME(?))", count)}
         ON DUPLICATE KEY UPDATE $VERSION = VALUES($VERSION), $BODY = VALUES($BODY), $DELETED = VALUES($DELETED)
-    """.trimIndent()
-
-    /**
-     * Returns the statement deleting the given number of documents. The parameters of the statement are, for each
-     * document, the partition hash, the partition key and the sort key.
-     */
-    fun deleteSql(count: Int): String = cachedDeleteSql(count)
-
-    private fun createDeleteSql(count: Int): String = """
-        DELETE FROM $tableName WHERE ($PARTITION_HASH, $PARTITION_KEY, $SORT_KEY) IN (${keyTuples(count)})
     """.trimIndent()
 
     private fun keyTuples(count: Int): String = rows("(?, ?, ?)", count)

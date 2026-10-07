@@ -123,22 +123,16 @@ class TiDbDocumentStore(
     }
 
     private suspend fun updateMultipleDocuments(updatedDocuments: List<Document>, checkedDocuments: List<Document>) {
-        val documents: List<Document> = updatedDocuments + checkedDocuments
-
-        // A checked document that doesn't exist is written then deleted, so that a concurrent insert of the same
-        // document causes a conflict
-        val documentsToDelete: List<Document> = checkedDocuments.filter { it.version == 0L }
-        val documentsToUpsert: List<Pair<Document, String?>> =
-            updatedDocuments.map { it to fromBody(it.body) } + documentsToDelete.map { it to null }
+        val documents: Sequence<Document> = updatedDocuments.asSequence() + checkedDocuments.asSequence()
 
         withConnection { connection ->
             try {
                 connection.createStatement("BEGIN OPTIMISTIC").rowsUpdated()
 
                 // Reading the documents for update makes the commit fail if a concurrent transaction writes any
-                // of them, including the documents that are only checked
+                // of them, including the documents that don't exist, because each document is read by its primary key.
                 val versions: Map<DocumentKey, Long> =
-                    connection.createStatement(table.selectVersionsSql(documents.size))
+                    connection.createStatement(table.selectVersionsSql(updatedDocuments.size + checkedDocuments.size))
                         .apply { bindKeys(documents.map { it.id }) }
                         .readVersions()
 
@@ -146,15 +140,9 @@ class TiDbDocumentStore(
                     throw UpdateConflictException(conflict.id)
                 }
 
-                if (documentsToUpsert.isNotEmpty()) {
-                    connection.createStatement(table.upsertSql(documentsToUpsert.size))
-                        .apply { bindUpsertDocuments(documentsToUpsert) }
-                        .rowsUpdated()
-                }
-
-                if (documentsToDelete.isNotEmpty()) {
-                    connection.createStatement(table.deleteSql(documentsToDelete.size))
-                        .apply { bindKeys(documentsToDelete.map { it.id }) }
+                if (updatedDocuments.isNotEmpty()) {
+                    connection.createStatement(table.upsertSql(updatedDocuments.size))
+                        .apply { bindUpsertDocuments(updatedDocuments) }
                         .rowsUpdated()
                 }
 
@@ -167,7 +155,7 @@ class TiDbDocumentStore(
 
                 // The conflict has been detected by the database rather than by the store
                 if (exception is R2dbcException && exception.errorCode in conflictCodes) {
-                    throw UpdateConflictException(documents[0].id)
+                    throw UpdateConflictException(documents.first().id)
                 } else {
                     throw exception
                 }
@@ -181,17 +169,17 @@ class TiDbDocumentStore(
         .asFlow()
         .fold(HashMap()) { versions, (id, version) -> versions.also { it[id] = version } }
 
-    private fun Statement.bindUpsertDocuments(written: List<Pair<Document, String?>>) {
+    private fun Statement.bindUpsertDocuments(documents: List<Document>) {
         // The time from which the documents can be removed if they are deleted
         val deleted: Long = expirationTime()
         var index = 0
 
-        for ((document, body) in written) {
-            bind(index++, partitionHash(document.id.partitionKey))
-            bind(index++, document.id.partitionKey)
-            bind(index++, document.id.sortKey)
-            bind(index++, document.version)
-            bindNullable(index++, body, String::class.java)
+        for ((id, body, version) in documents) {
+            bind(index++, partitionHash(id.partitionKey))
+            bind(index++, id.partitionKey)
+            bind(index++, id.sortKey)
+            bind(index++, version)
+            bindNullable(index++, fromBody(body), String::class.java)
             bindNullable(index++, if (body == null) deleted else null, Long::class.javaObjectType)
         }
     }
@@ -225,7 +213,7 @@ class TiDbDocumentStore(
 
         val documents: Map<DocumentKey, Document> = withConnection { connection ->
             connection.createStatement(table.selectDocumentsSql(distinctIds.size))
-                .apply { bindKeys(distinctIds) }
+                .apply { bindKeys(distinctIds.asSequence()) }
                 .asDocuments()
                 .toList()
                 .associateBy { it.id }
@@ -236,13 +224,13 @@ class TiDbDocumentStore(
         }
     }
 
-    private fun Statement.bindKeys(ids: List<DocumentKey>) {
+    private fun Statement.bindKeys(ids: Sequence<DocumentKey>) {
         var index = 0
 
-        for (id in ids) {
-            bind(index++, partitionHash(id.partitionKey))
-            bind(index++, id.partitionKey)
-            bind(index++, id.sortKey)
+        for ((partitionKey, sortKey) in ids) {
+            bind(index++, partitionHash(partitionKey))
+            bind(index++, partitionKey)
+            bind(index++, sortKey)
         }
     }
 
