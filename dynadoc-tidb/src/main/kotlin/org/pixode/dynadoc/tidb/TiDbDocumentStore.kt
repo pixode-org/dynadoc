@@ -88,40 +88,39 @@ class TiDbDocumentStore(
         // The time from which the document can be removed if it is deleted
         val deleted: Long? = if (body == null) expirationTime() else null
 
-        val rowsUpdated: Long =
-            try {
-                withConnection { connection ->
-                    if (document.version == 0L) {
-                        try {
-                            connection.createSingleDocument(document, body, deleted).rowsUpdated()
-                        } catch (exception: R2dbcException) {
-                            // The row already exists: it is replaced if it is a placeholder, which has a version
-                            // of 0, and no row is updated otherwise
-                            if (exception.errorCode == DUPLICATE_ENTRY) {
-                                connection.updateSingleDocument(document, body, deleted).rowsUpdated()
-                            } else {
-                                throw exception
-                            }
+        val rowsUpdated: Long = try {
+            withConnection { connection ->
+                if (document.version == 0L) {
+                    try {
+                        connection.insertSingleDocument(document, body, deleted).rowsUpdated()
+                    } catch (exception: R2dbcException) {
+                        // The row already exists: it is replaced if it is a placeholder, which has a version
+                        // of 0, and no row is updated otherwise
+                        if (exception.errorCode == DUPLICATE_ENTRY) {
+                            connection.updateSingleDocument(document, body, deleted).rowsUpdated()
+                        } else {
+                            throw exception
                         }
-                    } else {
-                        connection.updateSingleDocument(document, body, deleted).rowsUpdated()
                     }
-                }
-            } catch (exception: R2dbcException) {
-                // The document has been created or written by a concurrent transaction
-                if (exception.errorCode in conflictCodes) {
-                    throw UpdateConflictException(document.id)
                 } else {
-                    throw exception
+                    connection.updateSingleDocument(document, body, deleted).rowsUpdated()
                 }
             }
+        } catch (exception: R2dbcException) {
+            // The document has been created or written by a concurrent transaction
+            if (exception.errorCode in conflictCodes) {
+                throw UpdateConflictException(document.id)
+            } else {
+                throw exception
+            }
+        }
 
         if (rowsUpdated == 0L) {
             throw UpdateConflictException(document.id)
         }
     }
 
-    private fun Connection.createSingleDocument(document: Document, body: String?, deleted: Long?): Statement =
+    private fun Connection.insertSingleDocument(document: Document, body: String?, deleted: Long?): Statement =
         createStatement(table.insertSql)
             .bind(0, partitionHash(document.id.partitionKey))
             .bind(1, document.id.partitionKey)
@@ -202,12 +201,12 @@ class TiDbDocumentStore(
                     bind(index++, id.sortKey)
                     bind(index++, version)
                     bindNullable(index++, fromBody(body), String::class.java)
+
                     val deleted: Long? = when {
                         body != null -> null
                         version == 0L -> 1L
                         else -> expirationTime
                     }
-
                     bindNullable(index++, deleted, Long::class.javaObjectType)
                 }
             }

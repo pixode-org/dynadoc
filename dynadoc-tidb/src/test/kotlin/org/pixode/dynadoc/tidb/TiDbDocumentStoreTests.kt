@@ -10,9 +10,7 @@ import io.r2dbc.spi.Statement
 import java.util.UUID
 import java.util.concurrent.TimeUnit
 import java.util.stream.Stream
-import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.toList
-import kotlinx.coroutines.reactive.asFlow
 import kotlinx.coroutines.reactive.awaitFirstOrNull
 import kotlinx.coroutines.reactive.awaitSingle
 import kotlinx.coroutines.reactive.publish
@@ -34,6 +32,7 @@ import org.pixode.dynadoc.core.parseDocument
 import org.pixode.dynadoc.core.updateDocuments
 import org.pixode.dynadoc.tidb.TiDbDocumentStoreTests.MethodSources.PREFIX
 import org.reactivestreams.Publisher
+import org.testcontainers.images.builder.Transferable
 import org.testcontainers.junit.jupiter.Container
 import org.testcontainers.junit.jupiter.Testcontainers
 import org.testcontainers.tidb.TiDBContainer
@@ -46,6 +45,7 @@ private const val JSON_4 = """ {"stu":"vwx"} """
 private const val JSON_5 = """ {"yza":"bcd"} """
 private const val JSON_6 = """ {"efg":"hij"} """
 private const val WRITE_CONFLICT = 9007
+
 private const val PARTITION_FILTER = "$PARTITION_HASH = CRC32(?) AND $PARTITION_KEY = ?"
 
 // A test waiting for a lock would otherwise never complete
@@ -447,53 +447,84 @@ class TiDbDocumentStoreTests {
 
     //region updateDocuments: Concurrent transactions
 
-    @ParameterizedTest
-    @ValueSource(strings = ["single", "multiple"])
-    fun updateDocuments_concurrentUpdate(mode: String) = runBlocking {
+    @Test
+    fun updateDocuments_concurrentUpdateSingleDocument() = runBlocking {
+        updateDocument(ids[0], JSON_1, 0)
+
+        val exception: R2dbcException? = withConcurrentTransaction(parseDocument(ids[0], JSON_2, 1)) {
+            store.updateDocuments(parseDocument(ids[0], JSON_3, 1))
+        }
+
+        val document = store.getDocument(ids[0])
+
+        assertEquals(WRITE_CONFLICT, exception?.errorCode)
+        assertDocument(document, ids[0], JSON_3, 2)
+    }
+
+    @Test
+    fun updateDocuments_concurrentUpdateMultipleDocuments() = runBlocking {
         updateDocument(ids[0], JSON_1, 0)
         updateDocument(ids[1], JSON_2, 0)
 
-        // The update is committed first, so the concurrent transaction writing the same document can't be committed
         val exception: R2dbcException? = withConcurrentTransaction(parseDocument(ids[1], JSON_3, 1)) {
-            when (mode) {
-                "single" -> store.updateDocuments(parseDocument(ids[1], JSON_5, 1))
-
-                else -> store.updateDocuments(
-                    parseDocument(ids[0], JSON_4, 1),
-                    parseDocument(ids[1], JSON_5, 1),
-                )
-            }
+            store.updateDocuments(
+                parseDocument(ids[0], JSON_4, 1),
+                parseDocument(ids[1], JSON_5, 1),
+            )
         }
 
         val document1 = store.getDocument(ids[0])
         val document2 = store.getDocument(ids[1])
 
         assertEquals(WRITE_CONFLICT, exception?.errorCode)
-        assertDocument(document1, ids[0], if (mode == "single") JSON_1 else JSON_4, if (mode == "single") 1 else 2)
+        assertDocument(document1, ids[0], JSON_4, 2)
         assertDocument(document2, ids[1], JSON_5, 2)
     }
 
-    @ParameterizedTest
-    @ValueSource(strings = ["single", "multiple"])
-    fun updateDocuments_concurrentInsert(mode: String) = runBlocking {
-        // The update is committed first, so the concurrent transaction creating the same document can't be committed
-        val exception: R2dbcException? = withConcurrentTransaction(parseDocument(ids[1], JSON_1, 0)) {
-            when (mode) {
-                "single" -> store.updateDocuments(parseDocument(ids[1], JSON_3, 0))
+    @Test
+    fun updateDocuments_concurrentInsertSingleDocument() = runBlocking {
+        val exception: R2dbcException? = withConcurrentTransaction(parseDocument(ids[0], JSON_1, 0)) {
+            store.updateDocuments(parseDocument(ids[0], JSON_2, 0))
+        }
 
-                else -> store.updateDocuments(
-                    parseDocument(ids[0], JSON_2, 0),
-                    parseDocument(ids[1], JSON_3, 0),
-                )
-            }
+        val document = store.getDocument(ids[0])
+
+        assertEquals(WRITE_CONFLICT, exception?.errorCode)
+        assertDocument(document, ids[0], JSON_2, 1)
+    }
+
+    @Test
+    fun updateDocuments_concurrentInsertMultipleDocuments() = runBlocking {
+        val exception: R2dbcException? = withConcurrentTransaction(parseDocument(ids[1], JSON_1, 0)) {
+            store.updateDocuments(
+                parseDocument(ids[0], JSON_2, 0),
+                parseDocument(ids[1], JSON_3, 0),
+            )
         }
 
         val document1 = store.getDocument(ids[0])
         val document2 = store.getDocument(ids[1])
 
         assertEquals(WRITE_CONFLICT, exception?.errorCode)
-        assertDocument(document1, ids[0], if (mode == "single") null else JSON_2, if (mode == "single") 0 else 1)
+        assertDocument(document1, ids[0], JSON_2, 1)
         assertDocument(document2, ids[1], JSON_3, 1)
+    }
+
+    @Test
+    fun updateDocuments_concurrentInsertCheckedDocument() = runBlocking {
+        val exception: R2dbcException? = withConcurrentTransaction(parseDocument(ids[1], JSON_1, 0)) {
+            store.updateDocuments(
+                updatedDocuments = listOf(parseDocument(ids[0], JSON_2, 0)),
+                checkedDocuments = listOf(parseDocument(ids[1], JSON_3, 0)),
+            )
+        }
+
+        val document1 = store.getDocument(ids[0])
+        val document2 = store.getDocument(ids[1])
+
+        assertEquals(WRITE_CONFLICT, exception?.errorCode)
+        assertDocument(document1, ids[0], JSON_2, 1)
+        assertDocument(document2, ids[1], null, 0)
     }
 
     @ParameterizedTest
@@ -539,17 +570,50 @@ class TiDbDocumentStoreTests {
         assertDocument(document2, ids[1], JSON_3, version + 1)
     }
 
+    @ParameterizedTest
+    @ValueSource(strings = ["update", "insert"])
+    fun updateDocuments_concurrentLock(mode: String) = runBlocking {
+        if (mode == "update") {
+            updateDocument(ids[0], JSON_1, 0)
+        }
+        val version: Long = if (mode == "update") 1 else 0
+
+        // The connections of this store only wait for a second when a document is locked
+        val waitingStore = TiDbDocumentStore(createConnectionFactory("innodb_lock_wait_timeout=1"), TABLE)
+
+        // The document is locked by a concurrent transaction until it is committed, so the update of a single
+        // document waits until its lock wait timeout, which the database reports as an error
+        val exception: R2dbcException? =
+            withConcurrentTransaction(parseDocument(ids[0], JSON_2, version), "PESSIMISTIC") {
+                val conflict: UpdateConflictException = assertThrows {
+                    waitingStore.updateDocuments(parseDocument(ids[0], JSON_3, version))
+                }
+
+                assertEquals(ids[0], conflict.id)
+            }
+
+        val document = store.getDocument(ids[0])
+
+        assertEquals(null, exception)
+        assertDocument(document, ids[0], JSON_2, version + 1)
+    }
+
     //endregion
 
     /**
-     * Executes [block] while a concurrent optimistic transaction writing [document] is in progress, then commits the
-     * concurrent transaction, and returns the error raised by the commit, if any.
+     * Executes [block] while a concurrent transaction writing [document] is in progress, then commits the concurrent
+     * transaction, and returns the error raised by the commit, if any. The concurrent transaction is optimistic by
+     * default, so it doesn't lock the document. A pessimistic transaction locks it until it is committed.
      */
-    private suspend fun withConcurrentTransaction(document: Document, block: suspend () -> Unit): R2dbcException? {
+    private suspend fun withConcurrentTransaction(
+        document: Document,
+        transactionMode: String = "OPTIMISTIC",
+        block: suspend () -> Unit,
+    ): R2dbcException? {
         val connection: Connection = connectionFactory.create().awaitSingle()
 
         try {
-            connection.createStatement("BEGIN OPTIMISTIC").execute().awaitSingle().rowsUpdated.awaitFirstOrNull()
+            connection.createStatement("BEGIN $transactionMode").execute().awaitSingle().rowsUpdated.awaitFirstOrNull()
 
             connection
                 .createStatement(
@@ -886,25 +950,6 @@ class TiDbDocumentStoreTests {
             checkedDocuments = listOf(parseDocument(ids[0], """ {"ignored":"ignored"} """, version)),
         )
 
-    /**
-     * Executes a SQL statement and returns the first column of the result.
-     */
-    private suspend fun execute(sql: String, vararg values: Any): List<String> {
-        val connection: Connection = connectionFactory.create().awaitSingle()
-
-        try {
-            val statement: Statement = connection.createStatement(sql)
-            values.forEachIndexed { index, value -> statement.bind(index, value) }
-
-            return statement.execute().asFlow()
-                .map { result -> result.map { row, _ -> row.get(0, String::class.java).orEmpty() }.asFlow().toList() }
-                .toList()
-                .flatten()
-        } finally {
-            connection.close().awaitFirstOrNull()
-        }
-    }
-
     private fun assertDocuments(actual: List<Document>, expected: List<Document>) {
         assertEquals(expected.size, actual.size)
 
@@ -921,18 +966,40 @@ class TiDbDocumentStoreTests {
         const val TABLE = "tests"
         const val DATABASE = "test"
 
+        // A single statement waits for the documents locked by another transaction, instead of only detecting the conflict
+        // when it is committed, so that an update can be made to wait until its lock wait timeout
+        private val TIDB_CONFIGURATION = """
+            [pessimistic-txn]
+            pessimistic-auto-commit = true
+        """.trimIndent()
+
         lateinit var connectionFactory: ConnectionFactory
 
         @JvmStatic
         @Container
-        private val container = TiDBContainer("pingcap/tidb:v8.5.3")
+        private val container = TiDBContainer("pingcap/tidb:v8.5.3").apply {
+            withCopyToContainer(Transferable.of(TIDB_CONFIGURATION), "/etc/tidb.toml")
+            withCommand("--config=/etc/tidb.toml")
+        }
 
         @BeforeAll
         @JvmStatic
         fun globalSetup() {
             require(container.isRunning()) { container.logs }
+            connectionFactory = createConnectionFactory()
+
+            runBlocking {
+                TiDbDocumentStore(connectionFactory, TABLE).createTable()
+            }
+        }
+
+        /**
+         * Creates a connection factory whose connections have the given session variables, in addition to the ones
+         * used by all the tests.
+         */
+        fun createConnectionFactory(vararg sessionVariables: String): ConnectionFactory =
             // The statements are prepared on the server, which lets TiDB cache their plans
-            connectionFactory = MySqlConnectionFactory.from(
+            MySqlConnectionFactory.from(
                 MySqlConnectionConfiguration.builder()
                     .host(container.host)
                     .port(container.getMappedPort(4000))
@@ -940,14 +1007,9 @@ class TiDbDocumentStoreTests {
                     .database(DATABASE)
                     .useServerPrepareStatement()
                     // TiDB only caches the plans of the statements reading or writing several keys with this setting
-                    .sessionVariables("tidb_opt_fix_control='44830:ON'")
+                    .sessionVariables("tidb_opt_fix_control='44830:ON'", *sessionVariables)
                     .build(),
             )
-
-            runBlocking {
-                TiDbDocumentStore(connectionFactory, TABLE).createTable()
-            }
-        }
     }
 
     //endregion

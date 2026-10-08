@@ -73,7 +73,7 @@ class TiDbTable(table: String) {
     fun selectDocumentsSql(count: Int): String = cachedSelectDocumentsSql(count)
 
     private fun createSelectDocumentsSql(count: Int): String =
-        "$selectSql WHERE ($PARTITION_HASH, $PARTITION_KEY, $SORT_KEY) IN (${keyTuples(count)})"
+        "$selectSql WHERE ($PARTITION_HASH, $PARTITION_KEY, $SORT_KEY) IN (${rows("(?, ?, ?)", count)})"
 
     /**
      * Returns the statement reading the key and the version of the given number of documents, which exist, within a
@@ -86,7 +86,7 @@ class TiDbTable(table: String) {
 
     private fun createSelectVersionsSql(count: Int): String = """
         SELECT $PARTITION_KEY, $SORT_KEY, $VERSION FROM $tableName
-        WHERE ($PARTITION_HASH, $PARTITION_KEY, $SORT_KEY) IN (${keyTuples(count)}) FOR UPDATE
+        WHERE ($PARTITION_HASH, $PARTITION_KEY, $SORT_KEY) IN (${rows("(?, ?, ?)", count)}) FOR UPDATE
     """.trimIndent()
 
     /**
@@ -104,8 +104,6 @@ class TiDbTable(table: String) {
         VALUES ${rows("(?, ?, ?, ?, ?, FROM_UNIXTIME(?))", count)}
         ON DUPLICATE KEY UPDATE $VERSION = VALUES($VERSION), $BODY = VALUES($BODY), $DELETED = VALUES($DELETED)
     """.trimIndent()
-
-    private fun keyTuples(count: Int): String = rows("(?, ?, ?)", count)
 
     // The rows of a statement are separated by commas
     private fun rows(row: String, count: Int): String = generateSequence { row }.take(count).joinToString()
