@@ -43,7 +43,7 @@ The primary key is clustered and starts with the hash of the partition key. Part
 
 The `JSON` type of TiDB stores numbers that are not integers as double-precision floating-point numbers, so a number such as `1234567890.0987654321` is read back as `1234567890.0987654`.
 
-Deleted documents are kept with a `NULL` body so that their version is preserved, until TiDB removes them.
+Deleted documents are kept with a `NULL` body so that their version is preserved, until TiDB removes them. A row with a version of 0 and a `NULL` body is a placeholder, written when a document that doesn't exist is checked by an update of multiple documents. It is equivalent to a document that doesn't exist, and is removed by the next TTL job.
 
 ### The `JsonEntity<T>` type
 
@@ -310,14 +310,14 @@ The row is then removed by the TTL jobs of TiDB, which run every hour by default
 
 ### Concurrency
 
-An update of a single document is a single `INSERT` or `UPDATE` statement, which only writes the document if it has the expected version.
+An update of a single document is a single `INSERT` or `UPDATE` statement, which only writes the document if it has the expected version. When a document is created and the `INSERT` finds a row, a second statement replaces that row if it is a placeholder (see below).
 
 An update of multiple documents (for example with `EntityStore.transaction`) is a transaction made of a few statements, which are sent one after the other on the same connection. Their number doesn't depend on the number of documents:
 
 1. The transaction begins.
 2. The versions of all the documents, including the checked ones, are read for update.
 3. If a document doesn't have the expected version, nothing is written, the transaction is rolled back and an `UpdateConflictException` referring to that document is thrown.
-4. The updated documents are written with a single statement. A checked document that doesn't exist is also written, then deleted by a second statement, so that a concurrent creation of the same document causes a conflict.
+4. The updated documents are written with a single statement. A checked document that doesn't exist is written by the same statement as a placeholder, with a version of 0 and a `NULL` body, so that a concurrent creation of the same document causes a conflict.
 5. The transaction is committed.
 
 An update of multiple documents therefore takes four round trips to the database in the most common case, where the documents exist and none of them is only checked.
@@ -383,7 +383,7 @@ val result = documentStore.query(
 
 To read a partition directly, the condition must specify both the hash of the partition key and the partition key, as above. A condition on `partition_key` alone, or on a range of partition keys, reads the whole table, since partitions are stored in the order of their hashes.
 
-Both methods include deleted documents, which have a `NULL` body. They can be excluded from a query by adding `body IS NOT NULL` to the condition.
+Neither method returns deleted documents. With `query`, they are removed from the result of the statement, so a `LIMIT` in the condition applies before they are removed; adding `body IS NOT NULL` to the condition avoids this.
 
 ## License
 

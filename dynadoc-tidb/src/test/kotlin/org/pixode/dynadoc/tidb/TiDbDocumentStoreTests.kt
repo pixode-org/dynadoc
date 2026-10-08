@@ -691,12 +691,13 @@ class TiDbDocumentStoreTests {
         updateDocument(DocumentKey(partitionKey, "A"), JSON_1, 0)
         updateDocument(DocumentKey(partitionKey, "B"), JSON_2, 0)
         updateDocument(DocumentKey(partitionKey, "A"), null, 1)
+        // A document that is checked but doesn't exist
+        store.updateDocuments(emptyList(), listOf(Document(DocumentKey(partitionKey, "C"), null, 0)))
 
         val result = store.scan(partitionKey).toList()
 
-        assertEquals(2, result.size)
-        assertDocument(result[0], DocumentKey(partitionKey, "A"), null, 2)
-        assertDocument(result[1], DocumentKey(partitionKey, "B"), JSON_2, 1)
+        assertEquals(1, result.size)
+        assertDocument(result[0], DocumentKey(partitionKey, "B"), JSON_2, 1)
     }
 
     @Test
@@ -778,6 +779,20 @@ class TiDbDocumentStoreTests {
         }
 
         assertDocuments(result.toList(), documents.slice(20..280))
+    }
+
+    @Test
+    fun query_deletedDocuments() = runBlocking {
+        updateDocument(DocumentKey(partitionKey, "A"), JSON_1, 0)
+        updateDocument(DocumentKey(partitionKey, "B"), JSON_2, 0)
+        updateDocument(DocumentKey(partitionKey, "A"), null, 1)
+        // A document that is checked but doesn't exist
+        store.updateDocuments(emptyList(), listOf(Document(DocumentKey(partitionKey, "C"), null, 0)))
+
+        val result = store.query("$PARTITION_FILTER ORDER BY $SORT_KEY", partitionKey, partitionKey).toList()
+
+        assertEquals(1, result.size)
+        assertDocument(result[0], DocumentKey(partitionKey, "B"), JSON_2, 1)
     }
 
     //endregion

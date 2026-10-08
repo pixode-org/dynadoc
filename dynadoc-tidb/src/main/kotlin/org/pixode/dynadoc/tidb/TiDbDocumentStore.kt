@@ -10,6 +10,7 @@ import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.emitAll
 import kotlinx.coroutines.flow.emptyFlow
+import kotlinx.coroutines.flow.filter
 import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.flow.fold
 import kotlinx.coroutines.flow.map
@@ -48,11 +49,13 @@ private val conflictCodes: Set<Int> =
  * that they can be prepared (see the README).
  *
  * Updates are optimistic transactions, which don't lock the documents: an update fails when it is committed if any
- * of its documents has been written by a concurrent transaction.
+ * of its documents has been written by a concurrent transaction. A checked document that doesn't exist is written
+ * as a placeholder, with a version of 0 and a null body, so that it is covered as well. A placeholder is equivalent
+ * to a document that doesn't exist, and is removed by the next TTL job of the database.
  */
 class TiDbDocumentStore(
     private val connectionFactory: ConnectionFactory,
-    private val tableName: String,
+    tableName: String,
     private val expiration: Duration = Duration.ofDays(30),
     private val clock: Clock = Clock.systemUTC(),
 ) : DocumentStore {
@@ -88,25 +91,21 @@ class TiDbDocumentStore(
         val rowsUpdated: Long =
             try {
                 withConnection { connection ->
-                    val statement: Statement =
-                        if (document.version == 0L) {
-                            connection.createStatement(table.insertSql)
-                                .bind(0, partitionHash(document.id.partitionKey))
-                                .bind(1, document.id.partitionKey)
-                                .bind(2, document.id.sortKey)
-                                .bindNullable(3, body, String::class.java)
-                                .bindNullable(4, deleted, Long::class.javaObjectType)
-                        } else {
-                            connection.createStatement(table.updateSql)
-                                .bindNullable(0, body, String::class.java)
-                                .bindNullable(1, deleted, Long::class.javaObjectType)
-                                .bind(2, partitionHash(document.id.partitionKey))
-                                .bind(3, document.id.partitionKey)
-                                .bind(4, document.id.sortKey)
-                                .bind(5, document.version)
+                    if (document.version == 0L) {
+                        try {
+                            connection.createSingleDocument(document, body, deleted).rowsUpdated()
+                        } catch (exception: R2dbcException) {
+                            // The row already exists: it is replaced if it is a placeholder, which has a version
+                            // of 0, and no row is updated otherwise
+                            if (exception.errorCode == DUPLICATE_ENTRY) {
+                                connection.updateSingleDocument(document, body, deleted).rowsUpdated()
+                            } else {
+                                throw exception
+                            }
                         }
-
-                    statement.rowsUpdated()
+                    } else {
+                        connection.updateSingleDocument(document, body, deleted).rowsUpdated()
+                    }
                 }
             } catch (exception: R2dbcException) {
                 // The document has been created or written by a concurrent transaction
@@ -122,6 +121,23 @@ class TiDbDocumentStore(
         }
     }
 
+    private fun Connection.createSingleDocument(document: Document, body: String?, deleted: Long?): Statement =
+        createStatement(table.insertSql)
+            .bind(0, partitionHash(document.id.partitionKey))
+            .bind(1, document.id.partitionKey)
+            .bind(2, document.id.sortKey)
+            .bindNullable(3, body, String::class.java)
+            .bindNullable(4, deleted, Long::class.javaObjectType)
+
+    private fun Connection.updateSingleDocument(document: Document, body: String?, deleted: Long?): Statement =
+        createStatement(table.updateSql)
+            .bindNullable(0, body, String::class.java)
+            .bindNullable(1, deleted, Long::class.javaObjectType)
+            .bind(2, partitionHash(document.id.partitionKey))
+            .bind(3, document.id.partitionKey)
+            .bind(4, document.id.sortKey)
+            .bind(5, document.version + 1)
+
     private suspend fun updateMultipleDocuments(updatedDocuments: List<Document>, checkedDocuments: List<Document>) {
         val documents: Sequence<Document> = updatedDocuments.asSequence() + checkedDocuments.asSequence()
 
@@ -130,7 +146,7 @@ class TiDbDocumentStore(
                 connection.createStatement("BEGIN OPTIMISTIC").rowsUpdated()
 
                 // Reading the documents for update makes the commit fail if a concurrent transaction writes any
-                // of them, including the documents that don't exist, because each document is read by its primary key.
+                // of them, including the documents that are only checked
                 val versions: Map<DocumentKey, Long> =
                     connection.createStatement(table.selectVersionsSql(updatedDocuments.size + checkedDocuments.size))
                         .apply { bindKeys(documents.map { it.id }) }
@@ -140,10 +156,13 @@ class TiDbDocumentStore(
                     throw UpdateConflictException(conflict.id)
                 }
 
-                if (updatedDocuments.isNotEmpty()) {
-                    connection.createStatement(table.upsertSql(updatedDocuments.size))
-                        .apply { bindUpsertDocuments(updatedDocuments) }
-                        .rowsUpdated()
+                // A checked document that doesn't exist can't be read for update, so it is written as a placeholder
+                // with a version of 0, which makes the commit fail if a concurrent transaction creates it
+                val upsert: List<Document> =
+                    updatedDocuments.map { it.copy(version = it.version + 1) } +
+                    checkedDocuments.filter { it.version == 0L && it.id !in versions }.map { Document(it.id, null, 0) }
+                if (upsert.isNotEmpty()) {
+                    connection.upsertDocuments(upsert).rowsUpdated()
                 }
 
                 connection.createStatement("COMMIT").rowsUpdated()
@@ -169,20 +188,29 @@ class TiDbDocumentStore(
         .asFlow()
         .fold(HashMap()) { versions, (id, version) -> versions.also { it[id] = version } }
 
-    private fun Statement.bindUpsertDocuments(documents: List<Document>) {
-        // The time from which the documents can be removed if they are deleted
-        val deleted: Long = expirationTime()
-        var index = 0
+    private fun Connection.upsertDocuments(documents: List<Document>): Statement =
+        createStatement(table.upsertSql(documents.size))
+            .apply {
+                // The time from which the documents can be removed if they are deleted. A placeholder, which has
+                // a version of 0, can be removed immediately
+                val expirationTime = expirationTime()
+                var index = 0
 
-        for ((id, body, version) in documents) {
-            bind(index++, partitionHash(id.partitionKey))
-            bind(index++, id.partitionKey)
-            bind(index++, id.sortKey)
-            bind(index++, version)
-            bindNullable(index++, fromBody(body), String::class.java)
-            bindNullable(index++, if (body == null) deleted else null, Long::class.javaObjectType)
-        }
-    }
+                for ((id, body, version) in documents) {
+                    bind(index++, partitionHash(id.partitionKey))
+                    bind(index++, id.partitionKey)
+                    bind(index++, id.sortKey)
+                    bind(index++, version)
+                    bindNullable(index++, fromBody(body), String::class.java)
+                    val deleted: Long? = when {
+                        body != null -> null
+                        version == 0L -> 1L
+                        else -> expirationTime
+                    }
+
+                    bindNullable(index++, deleted, Long::class.javaObjectType)
+                }
+            }
 
     private fun fromBody(body: JsonElement?): String? {
         require(body == null || body is JsonObject) { "The document must be a valid JSON object" }
@@ -241,7 +269,7 @@ class TiDbDocumentStore(
     /**
      * Retrieves the documents of a partition, sorted by sort key, whose sort key is greater than or equal to
      * [startSortKey] and lower than [endSortKey]. When [endSortKey] is null, all the documents of the partition
-     * starting from [startSortKey] are returned. Deleted documents are included, with a null body.
+     * starting from [startSortKey] are returned. Deleted documents are not returned.
      */
     fun scan(partitionKey: String, startSortKey: String = "", endSortKey: String? = null): Flow<Document> {
         val range: String = if (endSortKey == null) "" else " AND $SORT_KEY < ?"
@@ -262,6 +290,9 @@ class TiDbDocumentStore(
      *
      * The documents of a partition are read directly when the condition specifies both the hash of the partition key
      * and the partition key, as in `partition_hash = CRC32(?) AND partition_key = ?`.
+     *
+     * Deleted documents are not returned. They are removed from the result of the statement, so a `LIMIT` in the
+     * condition applies before they are removed.
      */
     fun query(where: String, vararg values: Any, configure: Statement.() -> Unit = { }): Flow<Document> =
         select(where) {
@@ -274,6 +305,8 @@ class TiDbDocumentStore(
             val documents: Flow<Document> = connection.createStatement("$selectSql WHERE $where")
                 .apply(configure)
                 .asDocuments()
+                // The rows of the deleted documents and the placeholders have a null body
+                .filter { it.body != null }
 
             emitAll(documents)
         }

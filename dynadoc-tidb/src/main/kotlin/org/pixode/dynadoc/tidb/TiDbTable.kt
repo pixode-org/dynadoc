@@ -29,7 +29,9 @@ class TiDbTable(table: String) {
      * sorted by sort key.
      *
      * The `deleted` column holds the time from which a deleted document can be removed, which is done by the TTL jobs
-     * of the database. It is null for the documents that are not deleted, which are never removed.
+     * of the database. It is null for the documents that are not deleted, which are never removed. It is also set on
+     * the placeholders, which are the rows with a version of 0 and a null body written for the documents that are
+     * checked but don't exist.
      */
     val createTableSql = """
         CREATE TABLE IF NOT EXISTS $tableName (
@@ -44,9 +46,9 @@ class TiDbTable(table: String) {
     """.trimIndent()
 
     /**
-     * Returns the statement creating a document, which fails if the document already exists. Its parameters are the
-     * partition hash, the partition key, the sort key, the body, and the time, in seconds since the epoch, from which
-     * the document can be removed if it is deleted.
+     * Returns the statement creating a document, which fails if a row already exists for the document, even if it is
+     * a placeholder. Its parameters are the partition hash, the partition key, the sort key, the body, and the time,
+     * in seconds since the epoch, from which the document can be removed if it is deleted.
      */
     val insertSql: String = """
         INSERT INTO $tableName ($PARTITION_HASH, $PARTITION_KEY, $SORT_KEY, $VERSION, $BODY, $DELETED)
@@ -55,12 +57,13 @@ class TiDbTable(table: String) {
 
     /**
      * Returns the statement updating a document, which doesn't update any row if the document doesn't have the
-     * expected version. Its parameters are the body, the time, in seconds since the epoch, from which the document
-     * can be removed if it is deleted, the partition hash, the partition key, the sort key and the expected version.
+     * expected version. It also replaces a placeholder, when the expected version is 0. Its parameters are the new
+     * version, the body, the time, in seconds since the epoch, from which the document can be removed if it is
+     * deleted, the partition hash, the partition key, the sort key and the expected version.
      */
     val updateSql: String = """
         UPDATE $tableName SET $VERSION = $VERSION + 1, $BODY = ?, $DELETED = FROM_UNIXTIME(?)
-        WHERE $PARTITION_HASH = ? AND $PARTITION_KEY = ? AND $SORT_KEY = ? AND $VERSION = ?
+        WHERE $PARTITION_HASH = ? AND $PARTITION_KEY = ? AND $SORT_KEY = ? AND $VERSION + 1 = ?
     """.trimIndent()
 
     /**
@@ -75,9 +78,7 @@ class TiDbTable(table: String) {
     /**
      * Returns the statement reading the key and the version of the given number of documents, which exist, within a
      * transaction. In an optimistic transaction, reading the documents for update doesn't lock them, but makes the
-     * commit fail if any of them has been written by a concurrent transaction since the transaction began. This
-     * includes the documents that don't exist, as long as each document is read by its primary key, which is the
-     * case with this statement.
+     * commit fail if any of them has been written by a concurrent transaction since the transaction began.
      *
      * The parameters of the statement are, for each document, the partition hash, the partition key and the sort key.
      */
@@ -90,8 +91,9 @@ class TiDbTable(table: String) {
 
     /**
      * Returns the statement writing the given number of documents, which are created if they don't exist. Its
-     * parameters are, for each document, the partition hash, the partition key, the sort key, the current version, the
+     * parameters are, for each document, the partition hash, the partition key, the sort key, the new version, the
      * new body, and the time, in seconds since the epoch, from which the document can be removed if it is deleted.
+     * A placeholder is written with a version of 0.
      *
      * The versions of the documents must have been checked before the statement is executed.
      */
@@ -99,7 +101,7 @@ class TiDbTable(table: String) {
 
     private fun createUpsertSql(count: Int): String = """
         INSERT INTO $tableName ($PARTITION_HASH, $PARTITION_KEY, $SORT_KEY, $VERSION, $BODY, $DELETED)
-        VALUES ${rows("(?, ?, ?, ? + 1, ?, FROM_UNIXTIME(?))", count)}
+        VALUES ${rows("(?, ?, ?, ?, ?, FROM_UNIXTIME(?))", count)}
         ON DUPLICATE KEY UPDATE $VERSION = VALUES($VERSION), $BODY = VALUES($BODY), $DELETED = VALUES($DELETED)
     """.trimIndent()
 
