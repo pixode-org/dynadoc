@@ -36,22 +36,6 @@ private val conflictCodes: Set<Int> =
 
 /**
  * Represents an implementation of the [DocumentStore] interface that relies on TiDB for persistence.
- *
- * Documents are stored in a table whose clustered primary key is made of a hash of the partition key, the partition
- * key and the sort key, with a `version` column and a JSON `body` column (see [createTable]). The hash spreads the
- * partitions evenly across the regions, while the documents of a partition are stored together, sorted by sort key,
- * and can be split across several regions. Deleted documents are kept with a null body so that their version is
- * preserved, until they are removed by the TTL jobs of the database, once [expiration] has elapsed.
- *
- * A single document is updated by a single statement. Multiple documents are updated by a transaction made of a fixed
- * number of statements, whatever the number of documents: the transaction begins, reads the versions of the documents,
- * writes them all with a single statement, then commits. Statements with the same shape are executed many times, so
- * that they can be prepared (see the README).
- *
- * Updates are optimistic transactions, which don't lock the documents: an update fails when it is committed if any
- * of its documents has been written by a concurrent transaction. A checked document that doesn't exist is written
- * as a placeholder, with a version of 0 and a null body, so that it is covered as well. A placeholder is equivalent
- * to a document that doesn't exist, and is removed by the next TTL job of the database.
  */
 class TiDbDocumentStore(
     private val connectionFactory: ConnectionFactory,
@@ -62,8 +46,6 @@ class TiDbDocumentStore(
     private val table = TiDbTable(tableName)
 
     private val partitionFilter: String = "$PARTITION_HASH = ? AND $PARTITION_KEY = ?"
-
-    private val selectSql: String = table.selectSql
 
     //region updateDocuments
 
@@ -144,8 +126,8 @@ class TiDbDocumentStore(
             try {
                 connection.createStatement("BEGIN OPTIMISTIC").rowsUpdated()
 
-                // Reading the documents for update makes the commit fail if a concurrent transaction writes any
-                // of them, including the documents that are only checked
+                // Reading the documents for update makes the commit fail if a concurrent transaction modifies any
+                // of them
                 val versions: Map<DocumentKey, Long> =
                     connection.createStatement(table.selectVersionsSql(updatedDocuments.size + checkedDocuments.size))
                         .apply { bindKeys(documents.map { it.id }) }
@@ -190,8 +172,6 @@ class TiDbDocumentStore(
     private fun Connection.upsertDocuments(documents: List<Document>): Statement =
         createStatement(table.upsertSql(documents.size))
             .apply {
-                // The time from which the documents can be removed if they are deleted. A placeholder, which has
-                // a version of 0, can be removed immediately
                 val expirationTime = expirationTime()
                 var index = 0
 
@@ -286,12 +266,6 @@ class TiDbDocumentStore(
      * Finds the documents matching the given condition, which is a SQL expression following the `WHERE` keyword and
      * referring to the columns `partition_hash`, `partition_key`, `sort_key`, `version` and `body`. The values of the
      * parameters `?` are given by [values], in that order.
-     *
-     * The documents of a partition are read directly when the condition specifies both the hash of the partition key
-     * and the partition key, as in `partition_hash = CRC32(?) AND partition_key = ?`.
-     *
-     * Deleted documents are not returned. They are removed from the result of the statement, so a `LIMIT` in the
-     * condition applies before they are removed.
      */
     fun query(where: String, vararg values: Any, configure: Statement.() -> Unit = { }): Flow<Document> =
         select(where) {
@@ -301,10 +275,9 @@ class TiDbDocumentStore(
 
     private fun select(where: String, configure: Statement.() -> Unit): Flow<Document> = flow {
         withConnection { connection ->
-            val documents: Flow<Document> = connection.createStatement("$selectSql WHERE $where")
+            val documents: Flow<Document> = connection.createStatement("${table.selectSql} WHERE $where")
                 .apply(configure)
                 .asDocuments()
-                // The rows of the deleted documents and the placeholders have a null body
                 .filter { it.body != null }
 
             emitAll(documents)
@@ -315,11 +288,6 @@ class TiDbDocumentStore(
 
     //region createTable
 
-    /**
-     * Creates the table, clustered by hash of the partition key, then partition key, then sort key, so that the
-     * partitions are spread evenly across the regions, and the documents of a partition are stored together and
-     * sorted by sort key.
-     */
     suspend fun createTable() {
         withConnection { connection ->
             connection.createStatement(table.createTableSql).rowsUpdated()
