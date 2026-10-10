@@ -26,10 +26,14 @@ import java.time.Duration
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.asFlow
 import kotlinx.coroutines.flow.emptyFlow
+import kotlinx.coroutines.flow.filter
 import kotlinx.coroutines.flow.flow
 import org.pixode.dynadoc.core.Document
 import org.pixode.dynadoc.core.DocumentKey
 import org.pixode.dynadoc.core.DocumentStore
+import org.pixode.dynadoc.core.SortDirection
+import org.pixode.dynadoc.core.SortKeyBound
+import org.pixode.dynadoc.core.SortKeyRange
 import org.pixode.dynadoc.core.UpdateConflictException
 
 /**
@@ -189,6 +193,69 @@ class DynamoDbDocumentStore(
 
             result.asFlow().collect(this)
         }
+    }
+
+    //endregion
+
+    //region getRange
+
+    /**
+     * Retrieves the documents of a partition, sorted by sort key, whose sort key is in the given range. Deleted
+     * documents are not returned.
+     */
+    override fun getRange(
+        partitionKey: String,
+        sortKeyRange: SortKeyRange,
+        direction: SortDirection,
+    ): Flow<Document> {
+        val start: SortKeyBound = sortKeyRange.start
+        val end: SortKeyBound = sortKeyRange.end
+
+        val values = mutableMapOf<String, AttributeValue>(":partitionKey" to AttributeValue.S(partitionKey))
+
+        // A key condition can only hold a single condition on the sort key, so when both bounds are specified, the
+        // key condition is inclusive and the excluded bounds are removed from the result, since a filter expression
+        // can't refer to a key attribute
+        val sortKeyCondition: String? = when {
+            start !is SortKeyBound.Unbounded && end !is SortKeyBound.Unbounded -> "#sortKey BETWEEN :start AND :end"
+            start is SortKeyBound.Inclusive -> "#sortKey >= :start"
+            start is SortKeyBound.Exclusive -> "#sortKey > :start"
+            end is SortKeyBound.Inclusive -> "#sortKey <= :end"
+            end is SortKeyBound.Exclusive -> "#sortKey < :end"
+            else -> null
+        }
+
+        start.valueOrNull()?.let { values[":start"] = AttributeValue.S(it) }
+        end.valueOrNull()?.let { values[":end"] = AttributeValue.S(it) }
+
+        val names = mutableMapOf(
+            "#partitionKey" to PARTITION_KEY,
+            "#deleted" to DELETED,
+        )
+        if (sortKeyCondition != null) {
+            names["#sortKey"] = SORT_KEY
+        }
+
+        val excludedSortKeys: Set<String> = setOfNotNull(
+            (start as? SortKeyBound.Exclusive)?.value,
+            (end as? SortKeyBound.Exclusive)?.value,
+        )
+
+        return query {
+            keyConditionExpression = listOfNotNull("#partitionKey = :partitionKey", sortKeyCondition)
+                .joinToString(" AND ")
+            filterExpression = "attribute_not_exists(#deleted)"
+            expressionAttributeNames = names
+            expressionAttributeValues = values
+            consistentRead = consistentReads
+            scanIndexForward = direction == SortDirection.ASCENDING
+        }.filter { it.id.sortKey !in excludedSortKeys }
+    }
+
+    private fun SortKeyBound.valueOrNull(): String? = when (this) {
+        is SortKeyBound.Inclusive -> value
+        is SortKeyBound.Exclusive -> value
+        SortKeyBound.Unbounded -> null
     }
 
     //endregion

@@ -2,9 +2,13 @@
 
 import kotlin.reflect.KType
 import kotlin.reflect.typeOf
+import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.mapNotNull
 import kotlinx.coroutines.flow.toList
 import org.pixode.dynadoc.core.DocumentKey
 import org.pixode.dynadoc.core.DocumentStore
+import org.pixode.dynadoc.core.SortDirection
+import org.pixode.dynadoc.core.SortKeyRange
 import org.pixode.dynadoc.core.UpdateConflictException
 
 /**
@@ -31,7 +35,6 @@ class EntityStore(
         )
     }
 
-
     /**
      * Retrieves multiple documents of the same type given their IDs, represented as [JsonEntity] objects.
      */
@@ -49,6 +52,18 @@ class EntityStore(
             jsonSerializer.fromDocument(document, ids[index].second)
         }
     }
+
+    /**
+     * Retrieves the documents in a partition, sorted by sort key, whose sort key is in the given range.
+     */
+    fun <T : Any> getRange(
+        type: KType,
+        partitionKey: String,
+        sortKeyRange: SortKeyRange = SortKeyRange.UNBOUNDED,
+        direction: SortDirection = SortDirection.ASCENDING,
+    ): Flow<JsonEntity<T>> = documentStore
+        .getRange(partitionKey, sortKeyRange, direction)
+        .mapNotNull { jsonSerializer.fromDocument<T>(it, type).ifExists() }
 }
 
 
@@ -60,3 +75,15 @@ suspend inline fun <reified T : Any> EntityStore.getEntity(id: DocumentKey): Jso
 
 suspend fun EntityStore.updateEntities(vararg updatedEntities: JsonEntity<Any?>) =
     updateEntities(updatedDocuments = updatedEntities.asIterable())
+
+inline fun <reified T : Any> EntityStore.getRange(
+    partitionKey: String,
+    sortKeyRange: SortKeyRange,
+    direction: SortDirection = SortDirection.ASCENDING
+): Flow<JsonEntity<T>> = getRange(typeOf<T>(), partitionKey, sortKeyRange, direction)
+
+inline fun <reified T : Any> EntityStore.getPrefixRange(
+    partitionKey: String,
+    sortKeyPrefix: String,
+    direction: SortDirection = SortDirection.ASCENDING
+): Flow<JsonEntity<T>> = getRange(partitionKey, SortKeyRange.fromPrefix(sortKeyPrefix), direction)

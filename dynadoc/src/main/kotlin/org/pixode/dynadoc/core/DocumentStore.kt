@@ -17,6 +17,15 @@ interface DocumentStore {
      * Retrieves multiple documents given their IDs.
      */
     fun getDocuments(ids: Iterable<DocumentKey>): Flow<Document>
+
+    /**
+     * Retrieves the documents in a partition, sorted by sort key, whose sort key is in the given range.
+     */
+    fun getRange(
+        partitionKey: String,
+        sortKeyRange: SortKeyRange = SortKeyRange.UNBOUNDED,
+        direction: SortDirection = SortDirection.ASCENDING,
+    ): Flow<Document>
 }
 
 /**

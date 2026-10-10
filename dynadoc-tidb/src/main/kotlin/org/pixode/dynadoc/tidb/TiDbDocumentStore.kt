@@ -24,6 +24,9 @@ import kotlinx.serialization.json.JsonObject
 import org.pixode.dynadoc.core.Document
 import org.pixode.dynadoc.core.DocumentKey
 import org.pixode.dynadoc.core.DocumentStore
+import org.pixode.dynadoc.core.SortDirection
+import org.pixode.dynadoc.core.SortKeyBound
+import org.pixode.dynadoc.core.SortKeyRange
 import org.pixode.dynadoc.core.UpdateConflictException
 
 private const val DUPLICATE_ENTRY = 1062
@@ -44,8 +47,6 @@ class TiDbDocumentStore(
     private val clock: Clock = Clock.systemUTC(),
 ) : DocumentStore {
     private val table = TiDbTable(tableName)
-
-    private val partitionFilter: String = "$PARTITION_HASH = ? AND $PARTITION_KEY = ?"
 
     //region updateDocuments
 
@@ -141,7 +142,7 @@ class TiDbDocumentStore(
                 // with a version of 0, which makes the commit fail if a concurrent transaction creates it
                 val upsert: List<Document> =
                     updatedDocuments.map { it.copy(version = it.version + 1) } +
-                    checkedDocuments.filter { it.version == 0L && it.id !in versions }.map { Document(it.id, null, 0) }
+                    checkedDocuments.filter { it.id !in versions }.map { Document(it.id, null, 0) }
                 if (upsert.isNotEmpty()) {
                     connection.upsertDocuments(upsert).rowsUpdated()
                 }
@@ -167,7 +168,7 @@ class TiDbDocumentStore(
         .awaitSingle()
         .map { row -> RowMapper.toDocumentKey(row) to RowMapper.toVersion(row) }
         .asFlow()
-        .fold(HashMap()) { versions, (id, version) -> versions.also { it[id] = version } }
+        .fold(mutableMapOf()) { versions, (id, version) -> versions.also { it[id] = version } }
 
     private fun Connection.upsertDocuments(documents: List<Document>): Statement =
         createStatement(table.upsertSql(documents.size))
@@ -243,40 +244,51 @@ class TiDbDocumentStore(
 
     //endregion
 
-    //region scan and query
+    //region getRange
 
     /**
-     * Retrieves the documents of a partition, sorted by sort key, whose sort key is greater than or equal to
-     * [startSortKey] and lower than [endSortKey]. When [endSortKey] is null, all the documents of the partition
-     * starting from [startSortKey] are returned. Deleted documents are not returned.
+     * Retrieves the documents of a partition, sorted by sort key, whose sort key is in the given range. Deleted
+     * documents are not returned.
      */
-    fun scan(partitionKey: String, startSortKey: String = "", endSortKey: String? = null): Flow<Document> {
-        val range: String = if (endSortKey == null) "" else " AND $SORT_KEY < ?"
+    override fun getRange(
+        partitionKey: String,
+        sortKeyRange: SortKeyRange,
+        direction: SortDirection,
+    ): Flow<Document> {
+        val conditions = StringBuilder("$PARTITION_HASH = ? AND $PARTITION_KEY = ?")
+        val values = mutableListOf<Any>(partitionHash(partitionKey), partitionKey)
 
-        return select("$partitionFilter AND $SORT_KEY >= ?$range ORDER BY $SORT_KEY") {
-            bind(0, partitionHash(partitionKey)).bind(1, partitionKey).bind(2, startSortKey)
-
-            if (endSortKey != null) {
-                bind(3, endSortKey)
-            }
+        when (val start = sortKeyRange.start) {
+            is SortKeyBound.Inclusive -> conditions.append(" AND $SORT_KEY >= ?").also { values += start.value }
+            is SortKeyBound.Exclusive -> conditions.append(" AND $SORT_KEY > ?").also { values += start.value }
+            SortKeyBound.Unbounded -> {}
         }
+
+        when (val end = sortKeyRange.end) {
+            is SortKeyBound.Inclusive -> conditions.append(" AND $SORT_KEY <= ?").also { values += end.value }
+            is SortKeyBound.Exclusive -> conditions.append(" AND $SORT_KEY < ?").also { values += end.value }
+            SortKeyBound.Unbounded -> {}
+        }
+
+        val order: String = if (direction == SortDirection.ASCENDING) "ASC" else "DESC"
+
+        return query("$conditions ORDER BY $SORT_KEY $order", *values.toTypedArray())
     }
+
+    //region query
 
     /**
      * Finds the documents matching the given condition, which is a SQL expression following the `WHERE` keyword and
      * referring to the columns `partition_hash`, `partition_key`, `sort_key`, `version` and `body`. The values of the
-     * parameters `?` are given by [values], in that order.
+     * parameters `?` are given by [values], in that order. Deleted documents are not returned.
      */
-    fun query(where: String, vararg values: Any, configure: Statement.() -> Unit = { }): Flow<Document> =
-        select(where) {
-            values.forEachIndexed { index, value -> bind(index, value) }
-            configure()
-        }
-
-    private fun select(where: String, configure: Statement.() -> Unit): Flow<Document> = flow {
+    fun query(where: String, vararg values: Any, configure: Statement.() -> Unit = { }): Flow<Document> = flow {
         withConnection { connection ->
             val documents: Flow<Document> = connection.createStatement("${table.selectSql} WHERE $where")
-                .apply(configure)
+                .apply {
+                    values.forEachIndexed { index, value -> bind(index, value) }
+                    configure()
+                }
                 .asDocuments()
                 .filter { it.body != null }
 

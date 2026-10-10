@@ -357,12 +357,27 @@ val connectionFactory: ConnectionFactory = ConnectionPool(
 
 ### Queries
 
-The documents of a partition can be retrieved, sorted by sort key, using the `scan` method. The range of sort keys is optional, with an inclusive start and an exclusive end:
+The documents of a partition can be retrieved, sorted by sort key, using the `getRange` method, which takes a `SortKeyRange`. Each bound of the range is inclusive, exclusive or unbounded. When no range is given, all the documents of the partition are returned:
 
 ```kotlin
-val result = documentStore.scan("products", startSortKey = "A", endSortKey = "M")
+val range = SortKeyRange(SortKeyBound.Inclusive("A"), SortKeyBound.Exclusive("M"))
+val result: Flow<Document> = documentStore.getRange("products", range)
+```
 
-val entities: Flow<JsonEntity<Product?>> = result.map(DefaultJsonSerializer::fromDocument)
+The documents are returned in ascending order of their sort keys, unless `SortDirection.DESCENDING` is passed as the last argument.
+
+The `EntityStore` class has the same method, which returns the documents as `JsonEntity` objects:
+
+```kotlin
+val entities: Flow<JsonEntity<Product>> = entityStore.getRange<Product>("products", range)
+```
+
+The documents whose sort key starts with a given prefix can be retrieved using the range returned by `SortKeyRange.fromPrefix`, or using the `getPrefixRange` method of the `EntityStore` class. The prefix is matched literally, with no wildcards, and only the matching range of the partition is read:
+
+```kotlin
+val result: Flow<Document> = documentStore.getRange("products", SortKeyRange.fromPrefix("shoes/"))
+
+val entities: Flow<JsonEntity<Product>> = entityStore.getPrefixRange<Product>("products", "shoes/")
 ```
 
 Custom queries can be performed using the `query` method, which takes the condition of a `WHERE` clause and the values of its parameters. The condition can refer to the columns of the table, and use the [JSON functions](https://docs.pingcap.com/tidb/stable/json-functions) on the `body` column:
