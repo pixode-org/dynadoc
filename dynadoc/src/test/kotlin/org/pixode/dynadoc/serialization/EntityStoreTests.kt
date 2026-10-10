@@ -1,7 +1,11 @@
-﻿package org.pixode.dynadoc.serialization
+﻿@file:Suppress("UnusedFlow")
 
+package org.pixode.dynadoc.serialization
+
+import io.mockk.verify
 import java.math.BigDecimal
 import kotlin.reflect.typeOf
+import kotlinx.coroutines.flow.toList
 import kotlinx.coroutines.runBlocking
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Test
@@ -10,11 +14,15 @@ import org.pixode.dynadoc.assertUpdateDocuments
 import org.pixode.dynadoc.core.Document
 import org.pixode.dynadoc.core.DocumentKey
 import org.pixode.dynadoc.core.DocumentStore
+import org.pixode.dynadoc.core.SortDirection
+import org.pixode.dynadoc.core.SortKeyBound
+import org.pixode.dynadoc.core.SortKeyRange
 import org.pixode.dynadoc.serialization.TestSerializer.jsonFor
 
 val ids = (0..9).map { i -> DocumentKey("document_$i", "STRING") }
 val idsInt = (0..9).map { i -> DocumentKey(i.toString(), "INT") }
 val idsNull = (0..9).map { i -> DocumentKey("document_$i", "NULL") }
+val idsRange = ('A'..'C').map { character -> DocumentKey("PK", "${character}_VALUE") }
 
 class EntityStoreTests {
     private val documentStore: DocumentStore = TestSerializer.createMockDocumentStore()
@@ -126,6 +134,46 @@ class EntityStoreTests {
         val result: JsonEntity<String?> = store.getEntity(idsNull[0])
 
         assertEntity(result, idsNull[0], null, 1)
+    }
+
+    //endregion
+
+    //region getRange
+
+    @Test
+    fun getRange_entities() = runBlocking {
+        val range = SortKeyRange(SortKeyBound.Inclusive("A"), SortKeyBound.Exclusive("M"))
+
+        val result: List<JsonEntity<String>> = store.getRange<String>("PK", range, SortDirection.DESCENDING).toList()
+
+        assertEquals(3, result.size)
+        assertEntity(result[0], idsRange[0], "BODY_A", 1)
+        assertEntity(result[1], idsRange[1], "BODY_B", 1)
+        assertEntity(result[2], idsRange[2], "BODY_C", 1)
+        verify(exactly = 1) {
+            documentStore.getRange(
+                partitionKey = "PK",
+                sortKeyRange = range,
+                direction = SortDirection.DESCENDING
+            )
+        }
+    }
+
+    @Test
+    fun getPrefixRange_entities() = runBlocking {
+        val result: List<JsonEntity<String>> = store.getPrefixRange<String>("PK", "SK").toList()
+
+        assertEquals(3, result.size)
+        assertEntity(result[0], idsRange[0], "BODY_A", 1)
+        assertEntity(result[1], idsRange[1], "BODY_B", 1)
+        assertEntity(result[2], idsRange[2], "BODY_C", 1)
+        verify(exactly = 1) {
+            documentStore.getRange(
+                partitionKey = "PK",
+                sortKeyRange = SortKeyRange(SortKeyBound.Inclusive("SK"), SortKeyBound.Exclusive("SL")),
+                direction = SortDirection.ASCENDING,
+            )
+        }
     }
 
     //endregion

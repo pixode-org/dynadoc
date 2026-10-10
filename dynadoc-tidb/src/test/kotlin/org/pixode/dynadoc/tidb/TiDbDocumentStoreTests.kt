@@ -26,6 +26,9 @@ import org.junit.jupiter.params.provider.MethodSource
 import org.junit.jupiter.params.provider.ValueSource
 import org.pixode.dynadoc.core.Document
 import org.pixode.dynadoc.core.DocumentKey
+import org.pixode.dynadoc.core.SortDirection
+import org.pixode.dynadoc.core.SortKeyBound
+import org.pixode.dynadoc.core.SortKeyRange
 import org.pixode.dynadoc.core.UpdateConflictException
 import org.pixode.dynadoc.core.getDocument
 import org.pixode.dynadoc.core.parseDocument
@@ -720,67 +723,123 @@ class TiDbDocumentStoreTests {
 
     //endregion
 
-    //region scan
+    //region getRange
 
     @Test
-    fun scan_range() = runBlocking {
-        val documents = (0..9).map { i ->
-            parseDocument(DocumentKey(partitionKey, "ABC0$i"), """ {"a":$i} """, 0)
-        }
-        store.updateDocuments(*documents.toTypedArray())
+    fun getRange_range() = runBlocking {
+        val documents = createDocumentRange()
 
-        val result = store.scan(partitionKey, "ABC03", "ABC06")
+        val range = SortKeyRange(SortKeyBound.Inclusive("ABC03"), SortKeyBound.Exclusive("ABC06"))
+        val result = store.getRange(partitionKey, range)
 
         assertDocuments(result.toList(), documents.slice(3..5))
     }
 
     @Test
-    fun scan_wholePartition() = runBlocking {
-        val documents = (0..9).map { i ->
-            parseDocument(DocumentKey(partitionKey, "ABC0$i"), """ {"a":$i} """, 0)
-        }
-        // Documents with the same sort keys in another partition
-        val otherDocuments = (0..9).map { i ->
-            parseDocument(DocumentKey("${partitionKey}_other", "ABC0$i"), """ {"b":$i} """, 0)
-        }
-        store.updateDocuments(*(otherDocuments + documents.reversed()).toTypedArray())
+    fun getRange_descending() = runBlocking {
+        val documents = createDocumentRange()
 
-        val result = store.scan(partitionKey)
+        val range = SortKeyRange(SortKeyBound.Inclusive("ABC03"), SortKeyBound.Exclusive("ABC06"))
+        val result = store.getRange(partitionKey, range, SortDirection.DESCENDING)
+
+        assertDocuments(result.toList(), documents.slice(3..5).reversed())
+    }
+
+    @Test
+    fun getRange_inclusiveBounds() = runBlocking {
+        val documents = createDocumentRange()
+
+        val range = SortKeyRange(SortKeyBound.Inclusive("ABC03"), SortKeyBound.Inclusive("ABC06"))
+        val result = store.getRange(partitionKey, range)
+
+        assertDocuments(result.toList(), documents.slice(3..6))
+    }
+
+    @Test
+    fun getRange_exclusiveStart() = runBlocking {
+        val documents = createDocumentRange()
+
+        val range = SortKeyRange(SortKeyBound.Exclusive("ABC03"), SortKeyBound.Inclusive("ABC06"))
+        val result = store.getRange(partitionKey, range)
+
+        assertDocuments(result.toList(), documents.slice(4..6))
+    }
+
+    @Test
+    fun getRange_unboundedEnd() = runBlocking {
+        val documents = createDocumentRange()
+
+        val range = SortKeyRange(SortKeyBound.Inclusive("ABC07"), SortKeyBound.Unbounded)
+        val result = store.getRange(partitionKey, range)
+
+        assertDocuments(result.toList(), documents.slice(7..9))
+    }
+
+    @Test
+    fun getRange_wholePartition() = runBlocking {
+        val documents = createDocumentRange()
+
+        val result = store.getRange(partitionKey)
 
         assertDocuments(result.toList(), documents)
     }
 
+    @ParameterizedTest
+    @ValueSource(strings = ["a%", "a_", "a", "é", "", "c"])
+    fun getRange_prefix(prefix: String) = runBlocking {
+        val documents = listOf("a%1", "a%2", "a_1", "ab", "a", "b", "é", "éa", "ê")
+            .map { parseDocument(DocumentKey(partitionKey, it), JSON_1, 0) }
+        store.updateDocuments(*documents.toTypedArray())
+
+        val result = store.getRange(partitionKey, SortKeyRange.fromPrefix(prefix)).toList()
+
+        assertDocuments(result, documents.filter { it.id.sortKey.startsWith(prefix) }.sortedBy { it.id.sortKey })
+    }
+
     @Test
-    fun scan_deletedDocuments() = runBlocking {
+    fun getRange_deletedDocuments() = runBlocking {
         updateDocument(DocumentKey(partitionKey, "A"), JSON_1, 0)
         updateDocument(DocumentKey(partitionKey, "B"), JSON_2, 0)
         updateDocument(DocumentKey(partitionKey, "A"), null, 1)
         // A document that is checked but doesn't exist
         store.updateDocuments(emptyList(), listOf(Document(DocumentKey(partitionKey, "C"), null, 0)))
 
-        val result = store.scan(partitionKey).toList()
+        val result = store.getRange(partitionKey).toList()
 
         assertEquals(1, result.size)
         assertDocument(result[0], DocumentKey(partitionKey, "B"), JSON_2, 1)
     }
 
     @Test
-    fun scan_emptyPartition() = runBlocking {
-        val result = store.scan(partitionKey).toList()
+    fun getRange_emptyPartition() = runBlocking {
+        val result = store.getRange(partitionKey).toList()
 
         assertEquals(0, result.size)
     }
 
     @Test
-    fun scan_byteOrder() = runBlocking {
+    fun getRange_byteOrder() = runBlocking {
         // Sort keys are ordered by their UTF-8 encoding, regardless of the locale of the database
         val sortKeys: List<String> = listOf("B", "a", "é")
         val documents = sortKeys.map { parseDocument(DocumentKey(partitionKey, it), JSON_1, 0) }
         store.updateDocuments(*documents.reversed().toTypedArray())
 
-        val result = store.scan(partitionKey)
+        val result = store.getRange(partitionKey)
 
         assertDocuments(result.toList(), documents)
+    }
+
+    private suspend fun createDocumentRange(): List<Document> {
+        val documents = (0..9).map { i ->
+            parseDocument(DocumentKey(partitionKey, "ABC0$i"), """ {"a":$i} """, 0)
+        }
+        val otherDocuments = (0..9).map { i ->
+            parseDocument(DocumentKey("${partitionKey}_other", "ABC0$i"), """ {"b":$i} """, 0)
+        }
+        // The documents are not created in the order of their sort keys
+        store.updateDocuments(*(otherDocuments + documents.reversed()).toTypedArray())
+
+        return documents
     }
 
     //endregion

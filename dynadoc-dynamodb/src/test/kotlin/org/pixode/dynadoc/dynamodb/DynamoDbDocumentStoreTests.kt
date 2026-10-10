@@ -21,6 +21,9 @@ import org.junit.jupiter.params.provider.MethodSource
 import org.junit.jupiter.params.provider.ValueSource
 import org.pixode.dynadoc.core.Document
 import org.pixode.dynadoc.core.DocumentKey
+import org.pixode.dynadoc.core.SortDirection
+import org.pixode.dynadoc.core.SortKeyBound
+import org.pixode.dynadoc.core.SortKeyRange
 import org.pixode.dynadoc.core.UpdateConflictException
 import org.pixode.dynadoc.core.getDocument
 import org.pixode.dynadoc.core.parseDocument
@@ -469,6 +472,116 @@ class DynamoDbDocumentStoreTests {
         val document = store.getDocument(ids[0])
 
         assertDocument(document, ids[0], json, 1)
+    }
+
+    //endregion
+
+    //region getRange
+
+    @Test
+    fun getRange_range() = runBlocking {
+        val documents = createDocumentRange()
+
+        val range = SortKeyRange(SortKeyBound.Inclusive("ABC03"), SortKeyBound.Exclusive("ABC06"))
+        val result = store.getRange(partitionKey, range).toList()
+
+        assertDocuments(result, documents.slice(3..5))
+    }
+
+    @Test
+    fun getRange_descending() = runBlocking {
+        val documents = createDocumentRange()
+
+        val range = SortKeyRange(SortKeyBound.Inclusive("ABC03"), SortKeyBound.Exclusive("ABC06"))
+        val result = store.getRange(partitionKey, range, SortDirection.DESCENDING)
+
+        assertDocuments(result.toList(), documents.slice(3..5).reversed())
+    }
+
+    @Test
+    fun getRange_inclusiveBounds() = runBlocking {
+        val documents = createDocumentRange()
+
+        val range = SortKeyRange(SortKeyBound.Inclusive("ABC03"), SortKeyBound.Inclusive("ABC06"))
+        val result = store.getRange(partitionKey, range).toList()
+
+        assertDocuments(result, documents.slice(3..6))
+    }
+
+    @Test
+    fun getRange_exclusiveBounds() = runBlocking {
+        val documents = createDocumentRange()
+
+        val range = SortKeyRange(SortKeyBound.Exclusive("ABC03"), SortKeyBound.Exclusive("ABC06"))
+        val result = store.getRange(partitionKey, range).toList()
+
+        assertDocuments(result, documents.slice(4..5))
+    }
+
+    @Test
+    fun getRange_unboundedStart() = runBlocking {
+        val documents = createDocumentRange()
+
+        val range = SortKeyRange(SortKeyBound.Unbounded, SortKeyBound.Exclusive("ABC03"))
+        val result = store.getRange(partitionKey, range).toList()
+
+        assertDocuments(result, documents.slice(0..2))
+    }
+
+    @Test
+    fun getRange_unboundedEnd() = runBlocking {
+        val documents = createDocumentRange()
+
+        val range = SortKeyRange(SortKeyBound.Exclusive("ABC07"), SortKeyBound.Unbounded)
+        val result = store.getRange(partitionKey, range).toList()
+
+        assertDocuments(result, documents.slice(8..9))
+    }
+
+    @Test
+    fun getRange_wholePartition() = runBlocking {
+        val documents = createDocumentRange()
+
+        val result = store.getRange(partitionKey).toList()
+
+        assertDocuments(result, documents)
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = ["a%", "a_", "a", "é", "", "c"])
+    fun getRange_prefix(prefix: String) = runBlocking {
+        val documents = listOf("a%1", "a%2", "a_1", "ab", "a", "b", "é", "éa", "ê")
+            .map { parseDocument(DocumentKey(partitionKey, it), JSON_1, 0) }
+        store.updateDocuments(*documents.toTypedArray())
+
+        val result = store.getRange(partitionKey, SortKeyRange.fromPrefix(prefix)).toList()
+
+        assertDocuments(result, documents.filter { it.id.sortKey.startsWith(prefix) }.sortedBy { it.id.sortKey })
+    }
+
+    @Test
+    fun getRange_deletedDocuments() = runBlocking {
+        store.updateDocuments(parseDocument(DocumentKey(partitionKey, "A"), JSON_1, 0))
+        store.updateDocuments(parseDocument(DocumentKey(partitionKey, "B"), JSON_2, 0))
+        store.updateDocuments(parseDocument(DocumentKey(partitionKey, "A"), null, 1))
+
+        val result = store.getRange(partitionKey).toList()
+
+        assertEquals(1, result.size)
+        assertDocument(result[0], DocumentKey(partitionKey, "B"), JSON_2, 1)
+    }
+
+    private suspend fun createDocumentRange(): List<Document> {
+        val documents = (0..9).map { i ->
+            parseDocument(DocumentKey(partitionKey, "ABC0$i"), """ {"a":$i} """, 0)
+        }
+        val otherDocuments = (0..9).map { i ->
+            parseDocument(DocumentKey("${partitionKey}_other", "ABC0$i"), """ {"b":$i} """, 0)
+        }
+        // The documents are not created in the order of their sort keys
+        store.updateDocuments(*(otherDocuments + documents.reversed()).toTypedArray())
+
+        return documents
     }
 
     //endregion

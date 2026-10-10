@@ -1,10 +1,12 @@
 ﻿package org.pixode.dynadoc.serialization
 
 import io.mockk.coEvery
+import io.mockk.every
 import io.mockk.mockk
 import kotlin.reflect.KType
 import kotlin.reflect.typeOf
 import kotlinx.coroutines.flow.asFlow
+import kotlinx.coroutines.flow.flow
 import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
@@ -34,12 +36,12 @@ object TestSerializer : JsonSerializer {
         @Suppress("UNCHECKED_CAST")
         return when (type) {
             typeOf<String>() -> {
-                assertEquals(key, "string")
+                assertEquals("string", key)
                 value.jsonPrimitive.content as T
             }
 
             typeOf<Int>() -> {
-                assertEquals(key, "int")
+                assertEquals("int", key)
                 value.jsonPrimitive.content.toInt() as T
             }
 
@@ -63,6 +65,27 @@ object TestSerializer : JsonSerializer {
                     )
                 }
                 .asFlow()
+        }
+        every { getRange(any(), any(), any()) } answers {
+            val partitionKey: String = firstArg<String>()
+            flow {
+                for (character in 'A'..'C') {
+                    emit(
+                        Document(
+                            id = DocumentKey(partitionKey, "${character}_VALUE"),
+                            body = jsonFor("BODY_${character}"),
+                            version = 1L,
+                        ),
+                    )
+                    emit(
+                        Document(
+                            id = DocumentKey(partitionKey, "${character}_NULL"),
+                            body = null,
+                            version = 1L,
+                        ),
+                    )
+                }
+            }
         }
     }
 }
