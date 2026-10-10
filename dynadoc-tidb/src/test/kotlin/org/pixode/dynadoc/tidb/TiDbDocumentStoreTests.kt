@@ -756,23 +756,37 @@ class TiDbDocumentStoreTests {
     }
 
     @Test
-    fun getRange_exclusiveStart() = runBlocking {
+    fun getRange_exclusiveBounds() = runBlocking {
         val documents = createDocumentRange()
 
-        val range = SortKeyRange(SortKeyBound.Exclusive("ABC03"), SortKeyBound.Inclusive("ABC06"))
+        val range = SortKeyRange(SortKeyBound.Exclusive("ABC03"), SortKeyBound.Exclusive("ABC06"))
         val result = store.getRange(partitionKey, range)
 
-        assertDocuments(result.toList(), documents.slice(4..6))
+        assertDocuments(result.toList(), documents.slice(4..5))
     }
 
-    @Test
-    fun getRange_unboundedEnd() = runBlocking {
+    @ParameterizedTest
+    @ValueSource(booleans = [true, false])
+    fun getRange_unboundedStart(inclusive: Boolean) = runBlocking {
         val documents = createDocumentRange()
+        val end: SortKeyBound = if (inclusive) SortKeyBound.Inclusive("ABC03") else SortKeyBound.Exclusive("ABC03")
+        val expected: List<Document> = if (inclusive) documents.slice(0..3) else documents.slice(0..2)
 
-        val range = SortKeyRange(SortKeyBound.Inclusive("ABC07"), SortKeyBound.Unbounded)
-        val result = store.getRange(partitionKey, range)
+        val result = store.getRange(partitionKey, SortKeyRange(SortKeyBound.Unbounded, end))
 
-        assertDocuments(result.toList(), documents.slice(7..9))
+        assertDocuments(result.toList(), expected)
+    }
+
+    @ParameterizedTest
+    @ValueSource(booleans = [true, false])
+    fun getRange_unboundedEnd(inclusive: Boolean) = runBlocking {
+        val documents = createDocumentRange()
+        val start: SortKeyBound = if (inclusive) SortKeyBound.Inclusive("ABC07") else SortKeyBound.Exclusive("ABC07")
+        val expected: List<Document> = if (inclusive) documents.slice(7..9) else documents.slice(8..9)
+
+        val result = store.getRange(partitionKey, SortKeyRange(start, SortKeyBound.Unbounded))
+
+        assertDocuments(result.toList(), expected)
     }
 
     @Test

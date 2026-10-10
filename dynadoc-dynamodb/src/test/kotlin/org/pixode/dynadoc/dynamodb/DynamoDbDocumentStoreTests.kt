@@ -483,9 +483,9 @@ class DynamoDbDocumentStoreTests {
         val documents = createDocumentRange()
 
         val range = SortKeyRange(SortKeyBound.Inclusive("ABC03"), SortKeyBound.Exclusive("ABC06"))
-        val result = store.getRange(partitionKey, range).toList()
+        val result = store.getRange(partitionKey, range)
 
-        assertDocuments(result, documents.slice(3..5))
+        assertDocuments(result.toList(), documents.slice(3..5))
     }
 
     @Test
@@ -503,9 +503,9 @@ class DynamoDbDocumentStoreTests {
         val documents = createDocumentRange()
 
         val range = SortKeyRange(SortKeyBound.Inclusive("ABC03"), SortKeyBound.Inclusive("ABC06"))
-        val result = store.getRange(partitionKey, range).toList()
+        val result = store.getRange(partitionKey, range)
 
-        assertDocuments(result, documents.slice(3..6))
+        assertDocuments(result.toList(), documents.slice(3..6))
     }
 
     @Test
@@ -513,38 +513,42 @@ class DynamoDbDocumentStoreTests {
         val documents = createDocumentRange()
 
         val range = SortKeyRange(SortKeyBound.Exclusive("ABC03"), SortKeyBound.Exclusive("ABC06"))
-        val result = store.getRange(partitionKey, range).toList()
+        val result = store.getRange(partitionKey, range)
 
-        assertDocuments(result, documents.slice(4..5))
+        assertDocuments(result.toList(), documents.slice(4..5))
     }
 
-    @Test
-    fun getRange_unboundedStart() = runBlocking {
+    @ParameterizedTest
+    @ValueSource(booleans = [true, false])
+    fun getRange_unboundedStart(inclusive: Boolean) = runBlocking {
         val documents = createDocumentRange()
+        val end: SortKeyBound = if (inclusive) SortKeyBound.Inclusive("ABC03") else SortKeyBound.Exclusive("ABC03")
+        val expected: List<Document> = if (inclusive) documents.slice(0..3) else documents.slice(0..2)
 
-        val range = SortKeyRange(SortKeyBound.Unbounded, SortKeyBound.Exclusive("ABC03"))
-        val result = store.getRange(partitionKey, range).toList()
+        val result = store.getRange(partitionKey, SortKeyRange(SortKeyBound.Unbounded, end))
 
-        assertDocuments(result, documents.slice(0..2))
+        assertDocuments(result.toList(), expected)
     }
 
-    @Test
-    fun getRange_unboundedEnd() = runBlocking {
+    @ParameterizedTest
+    @ValueSource(booleans = [true, false])
+    fun getRange_unboundedEnd(inclusive: Boolean) = runBlocking {
         val documents = createDocumentRange()
+        val start: SortKeyBound = if (inclusive) SortKeyBound.Inclusive("ABC07") else SortKeyBound.Exclusive("ABC07")
+        val expected: List<Document> = if (inclusive) documents.slice(7..9) else documents.slice(8..9)
 
-        val range = SortKeyRange(SortKeyBound.Exclusive("ABC07"), SortKeyBound.Unbounded)
-        val result = store.getRange(partitionKey, range).toList()
+        val result = store.getRange(partitionKey, SortKeyRange(start, SortKeyBound.Unbounded))
 
-        assertDocuments(result, documents.slice(8..9))
+        assertDocuments(result.toList(), expected)
     }
 
     @Test
     fun getRange_wholePartition() = runBlocking {
         val documents = createDocumentRange()
 
-        val result = store.getRange(partitionKey).toList()
+        val result = store.getRange(partitionKey)
 
-        assertDocuments(result, documents)
+        assertDocuments(result.toList(), documents)
     }
 
     @ParameterizedTest
@@ -561,14 +565,35 @@ class DynamoDbDocumentStoreTests {
 
     @Test
     fun getRange_deletedDocuments() = runBlocking {
-        store.updateDocuments(parseDocument(DocumentKey(partitionKey, "A"), JSON_1, 0))
-        store.updateDocuments(parseDocument(DocumentKey(partitionKey, "B"), JSON_2, 0))
-        store.updateDocuments(parseDocument(DocumentKey(partitionKey, "A"), null, 1))
+        updateDocument(DocumentKey(partitionKey, "A"), JSON_1, 0)
+        updateDocument(DocumentKey(partitionKey, "B"), JSON_2, 0)
+        updateDocument(DocumentKey(partitionKey, "A"), null, 1)
+        // A document that is checked but doesn't exist
+        store.updateDocuments(emptyList(), listOf(Document(DocumentKey(partitionKey, "C"), null, 0)))
 
         val result = store.getRange(partitionKey).toList()
 
         assertEquals(1, result.size)
         assertDocument(result[0], DocumentKey(partitionKey, "B"), JSON_2, 1)
+    }
+
+    @Test
+    fun getRange_emptyPartition() = runBlocking {
+        val result = store.getRange(partitionKey).toList()
+
+        assertEquals(0, result.size)
+    }
+
+    @Test
+    fun getRange_byteOrder() = runBlocking {
+        // Sort keys are ordered by their UTF-8 encoding, regardless of the locale of the database
+        val sortKeys: List<String> = listOf("B", "a", "é")
+        val documents = sortKeys.map { parseDocument(DocumentKey(partitionKey, it), JSON_1, 0) }
+        store.updateDocuments(*documents.reversed().toTypedArray())
+
+        val result = store.getRange(partitionKey)
+
+        assertDocuments(result.toList(), documents)
     }
 
     private suspend fun createDocumentRange(): List<Document> {
