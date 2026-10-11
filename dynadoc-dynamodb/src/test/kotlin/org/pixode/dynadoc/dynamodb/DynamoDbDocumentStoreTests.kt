@@ -478,68 +478,18 @@ class DynamoDbDocumentStoreTests {
 
     //region getRange
 
-    @Test
-    fun getRange_range() = runBlocking {
-        val documents = createDocumentRange()
-
-        val range = SortKeyRange(SortKeyBound.Inclusive("ABC03"), SortKeyBound.Exclusive("ABC06"))
-        val result = store.getRange(partitionKey, range)
-
-        assertDocuments(result.toList(), documents.slice(3..5))
-    }
-
-    @Test
-    fun getRange_descending() = runBlocking {
-        val documents = createDocumentRange()
-
-        val range = SortKeyRange(SortKeyBound.Inclusive("ABC03"), SortKeyBound.Exclusive("ABC06"))
-        val result = store.getRange(partitionKey, range, SortDirection.DESCENDING)
-
-        assertDocuments(result.toList(), documents.slice(3..5).reversed())
-    }
-
-    @Test
-    fun getRange_inclusiveBounds() = runBlocking {
-        val documents = createDocumentRange()
-
-        val range = SortKeyRange(SortKeyBound.Inclusive("ABC03"), SortKeyBound.Inclusive("ABC06"))
-        val result = store.getRange(partitionKey, range)
-
-        assertDocuments(result.toList(), documents.slice(3..6))
-    }
-
-    @Test
-    fun getRange_exclusiveBounds() = runBlocking {
-        val documents = createDocumentRange()
-
-        val range = SortKeyRange(SortKeyBound.Exclusive("ABC03"), SortKeyBound.Exclusive("ABC06"))
-        val result = store.getRange(partitionKey, range)
-
-        assertDocuments(result.toList(), documents.slice(4..5))
-    }
-
     @ParameterizedTest
-    @ValueSource(booleans = [true, false])
-    fun getRange_unboundedStart(inclusive: Boolean) = runBlocking {
+    @MethodSource("$PREFIX#getRange_bounds")
+    fun getRange_bounds(range: SortKeyRange, direction: SortDirection, expectedIndices: IntRange) = runBlocking {
         val documents = createDocumentRange()
-        val end: SortKeyBound = if (inclusive) SortKeyBound.Inclusive("ABC03") else SortKeyBound.Exclusive("ABC03")
-        val expected: List<Document> = if (inclusive) documents.slice(0..3) else documents.slice(0..2)
 
-        val result = store.getRange(partitionKey, SortKeyRange(SortKeyBound.Unbounded, end))
+        val result = store.getRange(partitionKey, range, direction)
 
-        assertDocuments(result.toList(), expected)
-    }
-
-    @ParameterizedTest
-    @ValueSource(booleans = [true, false])
-    fun getRange_unboundedEnd(inclusive: Boolean) = runBlocking {
-        val documents = createDocumentRange()
-        val start: SortKeyBound = if (inclusive) SortKeyBound.Inclusive("ABC07") else SortKeyBound.Exclusive("ABC07")
-        val expected: List<Document> = if (inclusive) documents.slice(7..9) else documents.slice(8..9)
-
-        val result = store.getRange(partitionKey, SortKeyRange(start, SortKeyBound.Unbounded))
-
-        assertDocuments(result.toList(), expected)
+        if (direction == SortDirection.ASCENDING) {
+            assertDocuments(result.toList(), documents.slice(expectedIndices))
+        } else {
+            assertDocuments(result.toList(), documents.slice(expectedIndices).reversed())
+        }
     }
 
     @Test
@@ -759,6 +709,30 @@ class DynamoDbDocumentStoreTests {
                 Arguments.of(JSON_1, null),
                 Arguments.of(null, null),
             )
+        }
+
+        // Every combination of start bound, end bound and direction, over the documents ABC00 to ABC09
+        @JvmStatic
+        fun getRange_bounds(): Stream<Arguments> {
+            // The bound, and the index of the first (for a start bound) or last (for an end bound) document included
+            val starts: List<Pair<SortKeyBound, Int>> = listOf(
+                SortKeyBound.Unbounded to 0,
+                SortKeyBound.Inclusive("ABC03") to 3,
+                SortKeyBound.Exclusive("ABC03") to 4,
+            )
+            val ends: List<Pair<SortKeyBound, Int>> = listOf(
+                SortKeyBound.Unbounded to 9,
+                SortKeyBound.Inclusive("ABC06") to 6,
+                SortKeyBound.Exclusive("ABC06") to 5,
+            )
+
+            return starts.flatMap { (start, first) ->
+                ends.flatMap { (end, last) ->
+                    SortDirection.entries.map { direction ->
+                        Arguments.of(SortKeyRange(start, end), direction, first..last)
+                    }
+                }
+            }.stream()
         }
 
         @JvmStatic
