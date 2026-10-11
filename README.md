@@ -33,18 +33,6 @@ CREATE TABLE documents (
 ) TTL = deleted + INTERVAL 0 DAY;
 ```
 
-- `partition_hash` holds the hash of the partition key, which is the same as the `CRC32` function of TiDB computes. It is set by the store when a document is written.
-- `partition_key` and `sort_key` hold the partition key and the sort key, which are limited to 255 characters. The `utf8mb4_0900_bin` collation sorts keys by their UTF-8 encoding, and doesn't ignore trailing spaces.
-- `version` is an integer representing the version of the document, for optimistic concurrency management purposes.
-- `body` holds the JSON document. Since the body has its own column, there are no reserved field names.
-- `deleted` is set on deleted documents. It holds the time from which the document can be removed, and is used by the [TTL feature](https://docs.pingcap.com/tidb/stable/time-to-live) of TiDB to clear soft-deleted documents from the table.
-
-The primary key is clustered and starts with the hash of the partition key. Partitions are therefore spread evenly across the regions, even when partition keys are increasing values such as timestamps or sequence numbers. The documents of a partition are stored together and sorted by sort key.
-
-The `JSON` type of TiDB stores numbers that are not integers as double-precision floating-point numbers, so a number such as `1234567890.0987654321` is read back as `1234567890.0987654`.
-
-Deleted documents are kept with a `NULL` body so that their version is preserved, until TiDB removes them. A row with a version of 0 and a `NULL` body is a placeholder, written when a document that doesn't exist is checked by an update of multiple documents. It is equivalent to a document that doesn't exist, and is removed by the next TTL job.
-
 ### The `JsonEntity<T>` type
 
 In the application code, documents are represented using the `JsonEntity<T>` type:
@@ -222,7 +210,34 @@ val modifiedEntity = entity.modify { null }
 entityStore.updateEntities(modifiedEntity)
 ```
 
+## Range queries
+
+The documents within a partition can be retrieved, sorted by sort key, using the `getRange` method. Each bound of the range is either inclusive, exclusive or unbounded.
+
+```kotlin
+val range = SortKeyRange(SortKeyBound.Inclusive("A"), SortKeyBound.Exclusive("M"))
+val result: Flow<Document> = documentStore.getRange("products", range)
+```
+
+The documents are returned in ascending order of their sort keys, unless `SortDirection.DESCENDING` is passed as the last argument.
+
+The `EntityStore` class has the same method, which returns the documents as `JsonEntity` objects:
+
+```kotlin
+val entities: Flow<JsonEntity<Product>> = entityStore.getRange<Product>("products", range)
+```
+
+The documents whose sort key starts with a given prefix can be retrieved using the range returned by `SortKeyRange.fromPrefix`, or using the `getPrefixRange` method of the `EntityStore` class. The prefix is matched literally, with no wildcards, and only the matching range of the partition is read:
+
+```kotlin
+val result: Flow<Document> = documentStore.getRange("products", SortKeyRange.fromPrefix("shoes/"))
+
+val entities: Flow<JsonEntity<Product>> = entityStore.getPrefixRange<Product>("products", "shoes/")
+```
+
 ## Advanced document queries
+
+### DynamoDB
 
 Advanced queries can be performed on the DynamoDB table.
 
@@ -241,6 +256,28 @@ val result = documentStore.scan {
 
 val entities: Flow<JsonEntity<Product?>> = result.map(DefaultJsonSerializer::fromDocument)
 ```
+
+### TiDB
+
+Custom queries can be performed using the `query` method, which takes the condition of a `WHERE` clause and the values of its parameters. The condition can refer to the columns of the table, and use the [JSON functions](https://docs.pingcap.com/tidb/stable/json-functions) on the `body` column:
+
+```kotlin
+val result = documentStore.query(
+    """
+        partition_hash = CRC32(?) AND partition_key = ?
+        AND body->'$.price' BETWEEN ? AND ?
+        ORDER BY sort_key
+    """,
+    "products",
+    "products",
+    100,
+    250,
+)
+```
+
+To read a partition directly, the condition must specify both the hash of the partition key and the partition key, as above. A condition on `partition_key` alone, or on a range of partition keys, reads the whole table, since partitions are stored in the order of their hashes.
+
+**Note:** With `query`, deleted documents are removed from the result of the statement, so a `LIMIT` in the condition applies before they are removed; adding `body IS NOT NULL` to the condition avoids this.
 
 ## Atomic batch updates
 
@@ -294,7 +331,7 @@ documentStore.createTable()
 val entityStore = EntityStore(documentStore, DefaultJsonSerializer)
 ```
 
-The module only depends on the R2DBC SPI, so an R2DBC driver for MySQL, such as `io.asyncer:r2dbc-mysql`, must be added to the project. Every operation takes a connection from the `ConnectionFactory` and closes it when it completes, so a connection pool such as `r2dbc-pool` should be used. The driver can send the statements as text, which is the default with `r2dbc-mysql`, or as [prepared statements](#prepared-statements).
+The module only depends on the R2DBC SPI, so an R2DBC driver for MySQL, such as `io.asyncer:r2dbc-mysql`, must be added to the project. A connection pool such as `r2dbc-pool` should be used. The driver can send the statements as text, which is the default with `r2dbc-mysql`, or as [prepared statements](#prepared-statements).
 
 The table name can be qualified with a database, as in `"database.documents"`. TiDB 7.4 or later is required.
 
@@ -306,31 +343,11 @@ A deleted document keeps its row, so that its version is preserved, for a durati
 val documentStore = TiDbDocumentStore(connectionFactory, "documents", expiration = Duration.ofDays(7))
 ```
 
-The row is then removed by the TTL jobs of TiDB, which run every hour by default, so it can remain for some time after it has expired. This interval is an attribute of the table, and can be changed with `ALTER TABLE documents TTL_JOB_INTERVAL = '24h'`. Once the row is removed, the document is read with a version of 0, as if it had never existed.
-
-### Concurrency
-
-An update of a single document is a single `INSERT` or `UPDATE` statement, which only writes the document if it has the expected version. When a document is created and the `INSERT` finds a row, a second statement replaces that row if it is a placeholder (see below).
-
-An update of multiple documents (for example with `EntityStore.transaction`) is a transaction made of a few statements, which are sent one after the other on the same connection. Their number doesn't depend on the number of documents:
-
-1. The transaction begins.
-2. The versions of all the documents, including the checked ones, are read for update.
-3. If a document doesn't have the expected version, nothing is written, the transaction is rolled back and an `UpdateConflictException` referring to that document is thrown.
-4. The updated documents are written with a single statement. A checked document that doesn't exist is written by the same statement as a placeholder, with a version of 0 and a `NULL` body, so that a concurrent creation of the same document causes a conflict.
-5. The transaction is committed.
-
-An update of multiple documents therefore takes four round trips to the database in the most common case, where the documents exist and none of them is only checked.
-
-Updates are optimistic transactions: they don't lock the documents while they run, and conflicts are detected by TiDB when the transaction is committed. If any of the documents of an update, including the checked ones, has been written by another transaction since the update started, the commit fails and an `UpdateConflictException` is thrown. TiDB doesn't indicate which document caused that conflict, so the exception then refers to the first document of the update. Under contention, using a `RetryPolicy` with `transaction` retries the update with fresh versions of the documents.
-
-An update never waits for another update of the store. It can however wait if one of its documents is locked for a long time by a transaction of another application, such as a pessimistic transaction left open.
+The row is later removed by the TTL jobs of TiDB.
 
 ### Prepared statements
 
-When TiDB receives a statement as text, it parses and plans it every time. Most of the statements of the store have the same text whatever their parameters (only the number of documents changes the text of the statements reading or updating multiple documents), so they can be prepared on the server: TiDB then reuses the plan it cached for the statement, which lowers its CPU usage. Since the SQL layer of TiDB is often the first resource to run out under a write-heavy load, this can increase the throughput of the store.
-
-With `r2dbc-mysql`, the connections have to be created with `useServerPrepareStatement`:
+With `r2dbc-mysql`, in order to enable prepared statements, the connections have to be created with `useServerPrepareStatement`:
 
 ```kotlin
 val connectionFactory: ConnectionFactory = ConnectionPool(
@@ -350,55 +367,9 @@ val connectionFactory: ConnectionFactory = ConnectionPool(
 )
 ```
 
-- A prepared statement and its cached plan belong to a connection, so the connections have to be reused, which a pool does. With a connection created for each operation, preparing statements only adds a round trip.
+**Notes:**
 - TiDB doesn't cache the plans of the statement reading several documents at once, which is used by `getDocuments`, unless `tidb_opt_fix_control` includes `44830:ON`. It is safe to enable with the store, which never sends the same key twice in a statement. Without it everything works, but `getDocuments` is planned every time when it reads more than one document.
 - The other statements are cached without any setting: the ones updating a single document, and the ones used by the updates of multiple documents.
-- TiDB doesn't cache the plan of a statement writing more than 33 documents, nor the plans of statements with a very large number of parameters, such as reading several hundred documents at once. They work, but are planned every time.
-
-### Queries
-
-The documents of a partition can be retrieved, sorted by sort key, using the `getRange` method, which takes a `SortKeyRange`. Each bound of the range is inclusive, exclusive or unbounded. When no range is given, all the documents of the partition are returned:
-
-```kotlin
-val range = SortKeyRange(SortKeyBound.Inclusive("A"), SortKeyBound.Exclusive("M"))
-val result: Flow<Document> = documentStore.getRange("products", range)
-```
-
-The documents are returned in ascending order of their sort keys, unless `SortDirection.DESCENDING` is passed as the last argument.
-
-The `EntityStore` class has the same method, which returns the documents as `JsonEntity` objects:
-
-```kotlin
-val entities: Flow<JsonEntity<Product>> = entityStore.getRange<Product>("products", range)
-```
-
-The documents whose sort key starts with a given prefix can be retrieved using the range returned by `SortKeyRange.fromPrefix`, or using the `getPrefixRange` method of the `EntityStore` class. The prefix is matched literally, with no wildcards, and only the matching range of the partition is read:
-
-```kotlin
-val result: Flow<Document> = documentStore.getRange("products", SortKeyRange.fromPrefix("shoes/"))
-
-val entities: Flow<JsonEntity<Product>> = entityStore.getPrefixRange<Product>("products", "shoes/")
-```
-
-Custom queries can be performed using the `query` method, which takes the condition of a `WHERE` clause and the values of its parameters. The condition can refer to the columns of the table, and use the [JSON functions](https://docs.pingcap.com/tidb/stable/json-functions) on the `body` column:
-
-```kotlin
-val result = documentStore.query(
-    """
-    partition_hash = CRC32(?) AND partition_key = ?
-    AND body->'$.price' BETWEEN ? AND ?
-    ORDER BY sort_key
-    """,
-    "products",
-    "products",
-    100,
-    250,
-)
-```
-
-To read a partition directly, the condition must specify both the hash of the partition key and the partition key, as above. A condition on `partition_key` alone, or on a range of partition keys, reads the whole table, since partitions are stored in the order of their hashes.
-
-Neither method returns deleted documents. With `query`, they are removed from the result of the statement, so a `LIMIT` in the condition applies before they are removed; adding `body IS NOT NULL` to the condition avoids this.
 
 ## License
 
