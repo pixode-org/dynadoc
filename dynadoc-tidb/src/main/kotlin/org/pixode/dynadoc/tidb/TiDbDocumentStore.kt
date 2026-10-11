@@ -16,6 +16,7 @@ import kotlinx.coroutines.flow.fold
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.toList
 import kotlinx.coroutines.reactive.asFlow
+import kotlinx.coroutines.reactive.awaitFirst
 import kotlinx.coroutines.reactive.awaitFirstOrNull
 import kotlinx.coroutines.reactive.awaitSingle
 import kotlinx.coroutines.withContext
@@ -322,7 +323,7 @@ class TiDbDocumentStore(
 
     private suspend fun Statement.rowsUpdated(): Long = execute()
         .asFlow()
-        .map { result -> result.rowsUpdated.awaitFirstOrNull() ?: 0L }
+        .map { result -> result.rowsUpdated.awaitFirst() }
         .fold(0L) { sum, count -> sum + count }
 
     private fun Statement.asDocuments(): Flow<Document> = flow {

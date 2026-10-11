@@ -1,6 +1,9 @@
 package org.pixode.dynadoc.tidb
 
 import org.junit.jupiter.api.Assertions.assertEquals
+import org.junit.jupiter.api.Assertions.assertNotSame
+import org.junit.jupiter.api.Assertions.assertSame
+import org.junit.jupiter.api.Test
 import org.junit.jupiter.params.ParameterizedTest
 import org.junit.jupiter.params.provider.CsvSource
 
@@ -21,5 +24,36 @@ class TiDbTableTests {
     )
     fun partitionHash_knownValues(partitionKey: String, expected: Long) {
         assertEquals(expected, partitionHash(partitionKey))
+    }
+
+    @Test
+    fun selectDocumentsSql_statementCached() {
+        val table = TiDbTable("documents")
+
+        val first = table.selectDocumentsSql(3)
+        val second = table.selectDocumentsSql(3)
+
+        val expected = """
+            SELECT partition_key, sort_key, version, CAST(body AS CHAR) AS body FROM `documents`
+            WHERE (partition_hash, partition_key, sort_key) IN ((?, ?, ?), (?, ?, ?), (?, ?, ?))
+        """.trimIndent().replace('\n', ' ')
+        assertEquals(expected, first)
+        assertSame(first, second)
+    }
+
+    @Test
+    fun selectDocumentsSql_statementNotCached() {
+        val table = TiDbTable("documents")
+
+        val first = table.selectDocumentsSql(20)
+        val second = table.selectDocumentsSql(20)
+
+        val expected = """
+            SELECT partition_key, sort_key, version, CAST(body AS CHAR) AS body FROM `documents`
+            WHERE (partition_hash, partition_key, sort_key) IN (${List(20) { "(?, ?, ?)" }.joinToString()})
+        """.trimIndent().replace('\n', ' ')
+        assertEquals(expected, first)
+        assertEquals(expected, second)
+        assertNotSame(first, second)
     }
 }

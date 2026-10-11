@@ -2,7 +2,7 @@ import org.jetbrains.kotlin.gradle.dsl.JvmTarget
 
 allprojects {
     group = "org.pixode"
-    version = "4.0.0"
+    version = "4.0.1"
 }
 
 plugins {

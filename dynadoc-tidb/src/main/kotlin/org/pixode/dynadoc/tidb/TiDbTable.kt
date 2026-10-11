@@ -86,7 +86,13 @@ class TiDbTable(table: String) {
 
     private fun cached(create: (Int) -> String): (Int) -> String {
         val statements: List<Lazy<String>> = List(10) { count -> lazy { create(count) } }
-        return { count -> statements.getOrNull(count)?.value ?: create(count) }
+        return { count ->
+            if (count < statements.size) {
+                statements[count].value
+            } else {
+                create(count)
+            }
+        }
     }
 
     private fun quoteIdentifier(identifier: String): String = "`${identifier.replace("`", "``")}`"
