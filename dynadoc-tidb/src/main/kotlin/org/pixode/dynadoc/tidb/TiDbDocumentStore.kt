@@ -30,14 +30,6 @@ import org.pixode.dynadoc.core.SortKeyBound
 import org.pixode.dynadoc.core.SortKeyRange
 import org.pixode.dynadoc.core.UpdateConflictException
 
-private const val DUPLICATE_ENTRY = 1062
-private const val LOCK_WAIT_TIMEOUT = 1205
-private const val DEADLOCK = 1213
-private const val WRITE_CONFLICT = 9007
-
-private val conflictCodes: Set<Int> =
-    setOf(DUPLICATE_ENTRY, LOCK_WAIT_TIMEOUT, DEADLOCK, WRITE_CONFLICT)
-
 /**
  * Represents an implementation of the [DocumentStore] interface that relies on TiDB for persistence.
  */
@@ -76,11 +68,9 @@ class TiDbDocumentStore(
             withConnection { connection ->
                 if (document.version == 0L) {
                     try {
-                        connection.insertSingleDocument(document, body, deleted).rowsUpdated()
+                        connection.insertSingleDocument(document).rowsUpdated()
                     } catch (exception: R2dbcException) {
-                        // The row already exists: it is replaced if it is a placeholder, which has a version
-                        // of 0, and no row is updated otherwise
-                        if (exception.errorCode == DUPLICATE_ENTRY) {
+                        if (exception.isPrimaryKeyViolation()) {
                             connection.updateSingleDocument(document, body, deleted).rowsUpdated()
                         } else {
                             throw exception
@@ -92,7 +82,7 @@ class TiDbDocumentStore(
             }
         } catch (exception: R2dbcException) {
             // The document has been created or written by a concurrent transaction
-            if (exception.errorCode in conflictCodes) {
+            if (exception.isConflict()) {
                 throw UpdateConflictException(document.id)
             } else {
                 throw exception
@@ -103,23 +93,6 @@ class TiDbDocumentStore(
             throw UpdateConflictException(document.id)
         }
     }
-
-    private fun Connection.insertSingleDocument(document: Document, body: String?, deleted: Long?): Statement =
-        createStatement(table.insertSql)
-            .bind(0, partitionHash(document.id.partitionKey))
-            .bind(1, document.id.partitionKey)
-            .bind(2, document.id.sortKey)
-            .bindNullable(3, body, String::class.java)
-            .bindNullable(4, deleted, Long::class.javaObjectType)
-
-    private fun Connection.updateSingleDocument(document: Document, body: String?, deleted: Long?): Statement =
-        createStatement(table.updateSql)
-            .bindNullable(0, body, String::class.java)
-            .bindNullable(1, deleted, Long::class.javaObjectType)
-            .bind(2, partitionHash(document.id.partitionKey))
-            .bind(3, document.id.partitionKey)
-            .bind(4, document.id.sortKey)
-            .bind(5, document.version + 1)
 
     private suspend fun updateMultipleDocuments(updatedDocuments: List<Document>, checkedDocuments: List<Document>) {
         val documents: Sequence<Document> = updatedDocuments.asSequence() + checkedDocuments.asSequence()
@@ -144,8 +117,13 @@ class TiDbDocumentStore(
                 val upsert: List<Document> =
                     updatedDocuments.map { it.copy(version = it.version + 1) } +
                     checkedDocuments.filter { it.id !in versions }.map { Document(it.id, null, 0) }
-                if (upsert.isNotEmpty()) {
-                    connection.upsertDocuments(upsert).rowsUpdated()
+
+                val (existing, new) = upsert.partition { it.id in versions }
+                if (new.isNotEmpty()) {
+                    connection.insertMultipleDocuments(new).rowsUpdated()
+                }
+                if (existing.isNotEmpty()) {
+                    connection.upsertMultipleDocuments(existing).rowsUpdated()
                 }
 
                 connection.createStatement("COMMIT").rowsUpdated()
@@ -156,7 +134,7 @@ class TiDbDocumentStore(
                 }
 
                 // The conflict has been detected by the database rather than by the store
-                if (exception is R2dbcException && exception.errorCode in conflictCodes) {
+                if (exception is R2dbcException && exception.isConflict()) {
                     throw UpdateConflictException(documents.first().id)
                 } else {
                     throw exception
@@ -171,27 +149,43 @@ class TiDbDocumentStore(
         .asFlow()
         .fold(mutableMapOf()) { versions, (id, version) -> versions.also { it[id] = version } }
 
-    private fun Connection.upsertDocuments(documents: List<Document>): Statement =
-        createStatement(table.upsertSql(documents.size))
-            .apply {
-                val expirationTime = expirationTime()
-                var index = 0
+    private fun Connection.insertSingleDocument(document: Document): Statement =
+        insertMultipleDocuments(listOf(document.copy(version = 1)))
 
-                for ((id, body, version) in documents) {
-                    bind(index++, partitionHash(id.partitionKey))
-                    bind(index++, id.partitionKey)
-                    bind(index++, id.sortKey)
-                    bind(index++, version)
-                    bindNullable(index++, fromBody(body), String::class.java)
+    private fun Connection.insertMultipleDocuments(documents: List<Document>): Statement =
+        createStatement(table.insertSql(documents.size)).bindDocuments(documents)
 
-                    val deleted: Long? = when {
-                        body != null -> null
-                        version == 0L -> 1L
-                        else -> expirationTime
-                    }
-                    bindNullable(index++, deleted, Long::class.javaObjectType)
-                }
+    private fun Connection.updateSingleDocument(document: Document, body: String?, deleted: Long?): Statement =
+        createStatement(table.updateSql)
+            .bindNullable(0, body, String::class.java)
+            .bindNullable(1, deleted, Long::class.javaObjectType)
+            .bind(2, partitionHash(document.id.partitionKey))
+            .bind(3, document.id.partitionKey)
+            .bind(4, document.id.sortKey)
+            .bind(5, document.version + 1)
+
+    private fun Connection.upsertMultipleDocuments(documents: List<Document>): Statement =
+        createStatement(table.upsertSql(documents.size)).bindDocuments(documents)
+
+    private fun Statement.bindDocuments(documents: List<Document>): Statement = apply {
+        val expirationTime = expirationTime()
+        var index = 0
+
+        for ((id, body, version) in documents) {
+            bind(index++, partitionHash(id.partitionKey))
+            bind(index++, id.partitionKey)
+            bind(index++, id.sortKey)
+            bind(index++, version)
+            bindNullable(index++, fromBody(body), String::class.java)
+
+            val deleted: Long? = when {
+                body != null -> null
+                version == 0L -> 1L
+                else -> expirationTime
             }
+            bindNullable(index++, deleted, Long::class.javaObjectType)
+        }
+    }
 
     private fun fromBody(body: JsonElement?): String? {
         require(body == null || body is JsonObject) { "The document must be a valid JSON object" }
@@ -332,3 +326,25 @@ class TiDbDocumentStore(
         }
     }
 }
+
+private const val DUPLICATE_ENTRY = 1062
+private const val LOCK_WAIT_TIMEOUT = 1205
+private const val DEADLOCK = 1213
+private const val WRITE_CONFLICT = 9007
+
+private val conflictCodes: Set<Int> =
+    setOf(LOCK_WAIT_TIMEOUT, DEADLOCK, WRITE_CONFLICT)
+
+private val primaryKeyViolationMessage = Regex("""for key '(?:[^']*\.)?PRIMARY'\s*$""")
+
+/**
+ * Returns whether the error is a duplicate entry for the primary key, as opposed to another unique index.
+ */
+private fun R2dbcException.isPrimaryKeyViolation(): Boolean =
+    errorCode == DUPLICATE_ENTRY && primaryKeyViolationMessage.containsMatchIn(message.orEmpty())
+
+/**
+ * Returns whether the error means that the document has been written by a concurrent transaction. A duplicate entry
+ * on a unique index other than the primary key is not a conflict, because it is caused by the content of the document.
+ */
+private fun R2dbcException.isConflict(): Boolean = errorCode in conflictCodes || isPrimaryKeyViolation()

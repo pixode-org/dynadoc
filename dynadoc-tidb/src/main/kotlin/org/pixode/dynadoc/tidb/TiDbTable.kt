@@ -10,6 +10,7 @@ class TiDbTable(table: String) {
     private val cachedSelectDocumentsSql = cached(::createSelectDocumentsSql)
     private val cachedSelectVersionsSql = cached(::createSelectVersionsSql)
     private val cachedUpsertSql = cached(::createUpsertSql)
+    private val cachedInsertSql = cached(::createInsertSql)
 
     /**
      * The statement reading the documents, to which a condition is appended.
@@ -30,14 +31,6 @@ class TiDbTable(table: String) {
             $DELETED TIMESTAMP NULL,
             PRIMARY KEY ($PARTITION_HASH, $PARTITION_KEY, $SORT_KEY) CLUSTERED
         ) TTL = $DELETED + INTERVAL 0 DAY
-    """.trimIndent()
-
-    /**
-     * The statement creating a document, which fails if a row already exists for the document.
-     */
-    val insertSql: String = """
-        INSERT INTO $tableName ($PARTITION_HASH, $PARTITION_KEY, $SORT_KEY, $VERSION, $BODY, $DELETED)
-        VALUES (?, ?, ?, 1, ?, FROM_UNIXTIME(?))
     """.trimIndent()
 
     /**
@@ -71,13 +64,25 @@ class TiDbTable(table: String) {
     fun upsertSql(count: Int): String = cachedUpsertSql(count)
 
     /**
-     * The statement writing the specified documents, which are created if they don't exist. The versions of the
-     * documents must have been checked before the statement is executed.
+     * The statement writing the specified documents, which must already exist. The versions of the documents must
+     * have been checked before the statement is executed.
      */
     private fun createUpsertSql(count: Int): String = """
         INSERT INTO $tableName ($PARTITION_HASH, $PARTITION_KEY, $SORT_KEY, $VERSION, $BODY, $DELETED)
         VALUES ${rows("(?, ?, ?, ?, ?, FROM_UNIXTIME(?))", count)}
         ON DUPLICATE KEY UPDATE $VERSION = VALUES($VERSION), $BODY = VALUES($BODY), $DELETED = VALUES($DELETED)
+    """.trimIndent()
+
+    fun insertSql(count: Int): String = cachedInsertSql(count)
+
+    /**
+     * The statement creating the specified documents, which fails if any key already exists, whether it is the
+     * primary key or another unique index. This is not the case of an upsert, which updates the row that conflicts on
+     * another unique index.
+     */
+    private fun createInsertSql(count: Int): String = """
+        INSERT INTO $tableName ($PARTITION_HASH, $PARTITION_KEY, $SORT_KEY, $VERSION, $BODY, $DELETED)
+        VALUES ${rows("(?, ?, ?, ?, ?, FROM_UNIXTIME(?))", count)}
     """.trimIndent()
 
     // The rows of a statement are separated by commas

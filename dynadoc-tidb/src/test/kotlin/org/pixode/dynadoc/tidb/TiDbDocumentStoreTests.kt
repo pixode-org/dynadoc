@@ -48,6 +48,7 @@ private const val JSON_4 = """ {"stu":"vwx"} """
 private const val JSON_5 = """ {"yza":"bcd"} """
 private const val JSON_6 = """ {"efg":"hij"} """
 private const val WRITE_CONFLICT = 9007
+private const val DUPLICATE_ENTRY = 1062
 
 private const val PARTITION_FILTER = "$PARTITION_HASH = CRC32(?) AND $PARTITION_KEY = ?"
 
@@ -163,6 +164,28 @@ class TiDbDocumentStoreTests {
         assertDocument(document2, ids[1], JSON_2, 1)
         assertDocument(document3, ids[2], JSON_4, 1)
         assertDocument(document4, ids[3], null, 0)
+    }
+
+    @Test
+    fun updateDocuments_multipleExistingDocuments() = runBlocking {
+        updateDocument(ids[0], JSON_1, 0)
+        updateDocument(ids[1], JSON_2, 0)
+        updateDocument(ids[2], JSON_3, 0)
+        updateDocument(ids[2], JSON_3, 1)
+
+        store.updateDocuments(
+            parseDocument(ids[0], JSON_4, 1),
+            parseDocument(ids[1], null, 1),
+            parseDocument(ids[2], JSON_5, 2),
+            parseDocument(ids[3], JSON_6, 0),
+        )
+
+        val documents: List<Document> = store.getDocuments(ids.take(4)).toList()
+
+        assertDocument(documents[0], ids[0], JSON_4, 2)
+        assertDocument(documents[1], ids[1], null, 2)
+        assertDocument(documents[2], ids[2], JSON_5, 3)
+        assertDocument(documents[3], ids[3], JSON_6, 1)
     }
 
     @Test
@@ -322,6 +345,87 @@ class TiDbDocumentStoreTests {
         val document = store.getDocument(specialId)
 
         assertDocument(document, specialId, json, 2)
+    }
+
+    @Test
+    fun updateDocuments_uniqueIndexViolationInsertSingleDocument() = runBlocking {
+        val uniqueValue = UUID.randomUUID().toString()
+        updateDocument(ids[0], """ {"unique":"$uniqueValue"} """, 0)
+
+        val exception = assertThrows<R2dbcException> {
+            updateDocument(ids[1], """ {"unique":"$uniqueValue"} """, 0)
+        }
+
+        val document = store.getDocument(ids[1])
+
+        assertEquals(DUPLICATE_ENTRY, exception.errorCode)
+        assertDocument(document, ids[1], null, 0)
+    }
+
+    @Test
+    fun updateDocuments_uniqueIndexViolationUpdateSingleDocument() = runBlocking {
+        val uniqueValue = UUID.randomUUID().toString()
+        updateDocument(ids[0], """ {"unique":"$uniqueValue"} """, 0)
+        updateDocument(ids[1], JSON_1, 0)
+
+        val exception = assertThrows<R2dbcException> {
+            updateDocument(ids[1], """ {"unique":"$uniqueValue"} """, 1)
+        }
+
+        val document = store.getDocument(ids[1])
+
+        assertEquals(DUPLICATE_ENTRY, exception.errorCode)
+        assertDocument(document, ids[1], JSON_1, 1)
+    }
+
+    @Test
+    fun updateDocuments_uniqueIndexViolationInsertMultipleDocuments() = runBlocking {
+        val uniqueValue = UUID.randomUUID().toString()
+        val json1 = """ {"unique":"$uniqueValue","a":1} """
+        val json3 = """ {"unique":"$uniqueValue","a":2} """
+        updateDocument(ids[0], json1, 0)
+
+        val exception = assertThrows<R2dbcException> {
+            store.updateDocuments(
+                parseDocument(ids[1], JSON_2, 0),
+                parseDocument(ids[2], json3, 0),
+            )
+        }
+
+        val document1 = store.getDocument(ids[0])
+        val document2 = store.getDocument(ids[1])
+        val document3 = store.getDocument(ids[2])
+
+        assertEquals(DUPLICATE_ENTRY, exception.errorCode)
+        assertDocument(document1, ids[0], json1, 1)
+        assertDocument(document2, ids[1], null, 0)
+        assertDocument(document3, ids[2], null, 0)
+    }
+
+    @Test
+    fun updateDocuments_uniqueIndexViolationUpdateMultipleDocuments() = runBlocking {
+        val uniqueValue = UUID.randomUUID().toString()
+        val json1 = """ {"unique":"$uniqueValue","a":1} """
+        val json3 = """ {"unique":"$uniqueValue","a":2} """
+        updateDocument(ids[0], json1, 0)
+        updateDocument(ids[1], JSON_1, 0)
+        updateDocument(ids[2], JSON_2, 0)
+
+        val exception = assertThrows<R2dbcException> {
+            store.updateDocuments(
+                parseDocument(ids[1], JSON_3, 1),
+                parseDocument(ids[2], json3, 1),
+            )
+        }
+
+        val document1 = store.getDocument(ids[0])
+        val document2 = store.getDocument(ids[1])
+        val document3 = store.getDocument(ids[2])
+
+        assertEquals(DUPLICATE_ENTRY, exception.errorCode)
+        assertDocument(document1, ids[0], json1, 1)
+        assertDocument(document2, ids[1], JSON_1, 1)
+        assertDocument(document3, ids[2], JSON_2, 1)
     }
 
     //endregion
@@ -1012,6 +1116,7 @@ class TiDbDocumentStoreTests {
     private companion object Setup {
         const val TABLE = "tests"
         const val DATABASE = "test"
+        const val UNIQUE_INDEX = "tests_unique"
 
         // A single statement waits for the documents locked by another transaction, instead of only detecting the conflict
         // when it is committed, so that an update can be made to wait until its lock wait timeout
@@ -1037,6 +1142,29 @@ class TiDbDocumentStoreTests {
 
             runBlocking {
                 TiDbDocumentStore(connectionFactory, TABLE).createTable()
+                createUniqueIndex()
+            }
+        }
+
+        /**
+         * Creates a unique index on the top level `unique` field of the body. TiDB doesn't support partial indexes,
+         * but the documents without this field have a `NULL` index value, which a unique index doesn't constrain.
+         */
+        private suspend fun createUniqueIndex() {
+            val connection: Connection = connectionFactory.create().awaitSingle()
+
+            try {
+                connection
+                    .createStatement(
+                        "CREATE UNIQUE INDEX $UNIQUE_INDEX ON $TABLE " +
+                        "((CAST($BODY->>'$.unique' AS CHAR($MAX_KEY_LENGTH)) COLLATE utf8mb4_bin))",
+                    )
+                    .execute()
+                    .awaitSingle()
+                    .rowsUpdated
+                    .awaitFirstOrNull()
+            } finally {
+                connection.close().awaitFirstOrNull()
             }
         }
 
