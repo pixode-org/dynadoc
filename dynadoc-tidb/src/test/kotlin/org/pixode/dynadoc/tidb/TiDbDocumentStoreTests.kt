@@ -47,6 +47,8 @@ private const val JSON_3 = """ {"mno":"pqr"} """
 private const val JSON_4 = """ {"stu":"vwx"} """
 private const val JSON_5 = """ {"yza":"bcd"} """
 private const val JSON_6 = """ {"efg":"hij"} """
+private const val JSON_7 = """ {"klm":"nop"} """
+private const val JSON_8 = """ {"qrs":"tuv"} """
 private const val WRITE_CONFLICT = 9007
 private const val DUPLICATE_ENTRY = 1062
 
@@ -143,49 +145,26 @@ class TiDbDocumentStoreTests {
     fun updateDocuments_multipleDocumentsSuccess() = runBlocking {
         updateDocument(ids[0], JSON_1, 0)
         updateDocument(ids[1], JSON_2, 0)
-
-        store.updateDocuments(
-            updatedDocuments = listOf(
-                parseDocument(ids[0], JSON_3, 1),
-                parseDocument(ids[2], JSON_4, 0),
-            ),
-            checkedDocuments = listOf(
-                parseDocument(ids[1], JSON_5, 1),
-                parseDocument(ids[3], JSON_6, 0),
-            ),
-        )
-
-        val document1 = store.getDocument(ids[0])
-        val document2 = store.getDocument(ids[1])
-        val document3 = store.getDocument(ids[2])
-        val document4 = store.getDocument(ids[3])
-
-        assertDocument(document1, ids[0], JSON_3, 2)
-        assertDocument(document2, ids[1], JSON_2, 1)
-        assertDocument(document3, ids[2], JSON_4, 1)
-        assertDocument(document4, ids[3], null, 0)
-    }
-
-    @Test
-    fun updateDocuments_multipleExistingDocuments() = runBlocking {
-        updateDocument(ids[0], JSON_1, 0)
-        updateDocument(ids[1], JSON_2, 0)
         updateDocument(ids[2], JSON_3, 0)
         updateDocument(ids[2], JSON_3, 1)
 
         store.updateDocuments(
-            parseDocument(ids[0], JSON_4, 1),
-            parseDocument(ids[1], null, 1),
-            parseDocument(ids[2], JSON_5, 2),
-            parseDocument(ids[3], JSON_6, 0),
+            updatedDocuments = listOf(
+                parseDocument(ids[0], JSON_4, 1),
+                parseDocument(ids[2], JSON_5, 2),
+                parseDocument(ids[3], JSON_6, 0),
+            ),
+            checkedDocuments = listOf(
+                parseDocument(ids[1], JSON_7, 1),
+                parseDocument(ids[4], JSON_8, 0),
+            ),
         )
 
-        val documents: List<Document> = store.getDocuments(ids.take(4)).toList()
-
-        assertDocument(documents[0], ids[0], JSON_4, 2)
-        assertDocument(documents[1], ids[1], null, 2)
-        assertDocument(documents[2], ids[2], JSON_5, 3)
-        assertDocument(documents[3], ids[3], JSON_6, 1)
+        assertDocument(store.getDocument(ids[0]), ids[0], JSON_4, 2)
+        assertDocument(store.getDocument(ids[1]), ids[1], JSON_2, 1)
+        assertDocument(store.getDocument(ids[2]), ids[2], JSON_5, 3)
+        assertDocument(store.getDocument(ids[3]), ids[3], JSON_6, 1)
+        assertDocument(store.getDocument(ids[4]), ids[4], null, 0)
     }
 
     @Test

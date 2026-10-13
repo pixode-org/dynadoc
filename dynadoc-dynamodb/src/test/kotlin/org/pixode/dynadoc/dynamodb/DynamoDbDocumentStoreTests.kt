@@ -40,6 +40,8 @@ private const val JSON_3 = """ {"mno":"pqr"} """
 private const val JSON_4 = """ {"stu":"vwx"} """
 private const val JSON_5 = """ {"yza":"bcd"} """
 private const val JSON_6 = """ {"efg":"hij"} """
+private const val JSON_7 = """ {"klm":"nop"} """
+private const val JSON_8 = """ {"qrs":"tuv"} """
 private val JSON_1MB = """ {"key":"${"a".repeat(1024 * 1024)}"} """
 private val STRING_100KB = "a".repeat(100 * 1024)
 
@@ -131,27 +133,26 @@ class DynamoDbDocumentStoreTests {
     fun updateDocuments_multipleDocumentsSuccess() = runBlocking {
         updateDocument(ids[0], JSON_1, 0)
         updateDocument(ids[1], JSON_2, 0)
+        updateDocument(ids[2], JSON_3, 0)
+        updateDocument(ids[2], JSON_3, 1)
 
         store.updateDocuments(
             updatedDocuments = listOf(
-                parseDocument(ids[0], JSON_3, 1),
-                parseDocument(ids[2], JSON_4, 0),
+                parseDocument(ids[0], JSON_4, 1),
+                parseDocument(ids[2], JSON_5, 2),
+                parseDocument(ids[3], JSON_6, 0),
             ),
             checkedDocuments = listOf(
-                parseDocument(ids[1], JSON_5, 1),
-                parseDocument(ids[3], JSON_6, 0),
+                parseDocument(ids[1], JSON_7, 1),
+                parseDocument(ids[4], JSON_8, 0),
             ),
         )
 
-        val document1 = store.getDocument(ids[0])
-        val document2 = store.getDocument(ids[1])
-        val document3 = store.getDocument(ids[2])
-        val document4 = store.getDocument(ids[3])
-
-        assertDocument(document1, ids[0], JSON_3, 2)
-        assertDocument(document2, ids[1], JSON_2, 1)
-        assertDocument(document3, ids[2], JSON_4, 1)
-        assertDocument(document4, ids[3], null, 0)
+        assertDocument(store.getDocument(ids[0]), ids[0], JSON_4, 2)
+        assertDocument(store.getDocument(ids[1]), ids[1], JSON_2, 1)
+        assertDocument(store.getDocument(ids[2]), ids[2], JSON_5, 3)
+        assertDocument(store.getDocument(ids[3]), ids[3], JSON_6, 1)
+        assertDocument(store.getDocument(ids[4]), ids[4], null, 0)
     }
 
     @Test

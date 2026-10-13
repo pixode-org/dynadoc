@@ -7,13 +7,8 @@ const val MAX_KEY_LENGTH = 255
 class TiDbTable(table: String) {
     val tableName: String = table.split('.').joinToString(".", transform = ::quoteIdentifier)
 
-    private val cachedSelectDocumentsSql = cached(::createSelectDocumentsSql)
-    private val cachedSelectVersionsSql = cached(::createSelectVersionsSql)
-    private val cachedUpsertSql = cached(::createUpsertSql)
-    private val cachedInsertSql = cached(::createInsertSql)
-
     /**
-     * The statement reading the documents, to which a condition is appended.
+     * The statement reading the documents, to which a `WHERE` clause may be appended.
      */
     val selectSql: String =
         "SELECT $PARTITION_KEY, $SORT_KEY, $VERSION, CAST($BODY AS CHAR) AS $BODY FROM $tableName"
@@ -34,57 +29,59 @@ class TiDbTable(table: String) {
     """.trimIndent()
 
     /**
-     * The statement updating a document, which doesn't update any row if the document doesn't have the expected
-     * version.
-     */
-    val updateSql: String = """
-        UPDATE $tableName SET $VERSION = $VERSION + 1, $BODY = ?, $DELETED = FROM_UNIXTIME(?)
-        WHERE $PARTITION_HASH = ? AND $PARTITION_KEY = ? AND $SORT_KEY = ? AND $VERSION + 1 = ?
-    """.trimIndent()
-
-    fun selectDocumentsSql(count: Int): String = cachedSelectDocumentsSql(count)
-
-    /**
      * The statement reading the specified documents, using a single batch read.
      */
-    private fun createSelectDocumentsSql(count: Int): String =
+    val selectDocumentsSql: (Int) -> String = cached { count ->
         "$selectSql WHERE ($PARTITION_HASH, $PARTITION_KEY, $SORT_KEY) IN (${rows("(?, ?, ?)", count)})"
-
-    fun selectVersionsSql(count: Int): String = cachedSelectVersionsSql(count)
+    }
 
     /**
      * The statement reading the versions of the specified documents for update. It will make the commit fail if
      * any of them has been updated by a concurrent transaction.
      */
-    private fun createSelectVersionsSql(count: Int): String = """
-        SELECT $PARTITION_KEY, $SORT_KEY, $VERSION FROM $tableName
-        WHERE ($PARTITION_HASH, $PARTITION_KEY, $SORT_KEY) IN (${rows("(?, ?, ?)", count)}) FOR UPDATE
-    """.trimIndent()
-
-    fun upsertSql(count: Int): String = cachedUpsertSql(count)
-
-    /**
-     * The statement writing the specified documents, which must already exist. The versions of the documents must
-     * have been checked before the statement is executed.
-     */
-    private fun createUpsertSql(count: Int): String = """
-        INSERT INTO $tableName ($PARTITION_HASH, $PARTITION_KEY, $SORT_KEY, $VERSION, $BODY, $DELETED)
-        VALUES ${rows("(?, ?, ?, ?, ?, FROM_UNIXTIME(?))", count)}
-        ON DUPLICATE KEY UPDATE $VERSION = VALUES($VERSION), $BODY = VALUES($BODY), $DELETED = VALUES($DELETED)
-    """.trimIndent()
-
-    fun insertSql(count: Int): String = cachedInsertSql(count)
+    val selectVersionsSql: (Int) -> String = cached { count ->
+        """
+            SELECT $PARTITION_KEY, $SORT_KEY, $VERSION FROM $tableName
+            WHERE ($PARTITION_HASH, $PARTITION_KEY, $SORT_KEY) IN (${rows("(?, ?, ?)", count)}) FOR UPDATE
+        """.trimIndent()
+    }
 
     /**
-     * The statement creating the specified documents, which fails if any key already exists, whether it is the
-     * primary key or another unique index. This is not the case of an upsert, which updates the row that conflicts on
-     * another unique index.
+     * The statement updating a single document. It doesn't update any row if the document doesn't have the expected
+     * version.
      */
-    private fun createInsertSql(count: Int): String = """
-        INSERT INTO $tableName ($PARTITION_HASH, $PARTITION_KEY, $SORT_KEY, $VERSION, $BODY, $DELETED)
-        VALUES ${rows("(?, ?, ?, ?, ?, FROM_UNIXTIME(?))", count)}
+    val updateSingleSql: String = """
+        UPDATE $tableName SET $VERSION = $VERSION + 1, $BODY = ?, $DELETED = FROM_UNIXTIME(?)
+        WHERE $PARTITION_HASH = ? AND $PARTITION_KEY = ? AND $SORT_KEY = ? AND $VERSION + 1 = ?
     """.trimIndent()
 
+    /**
+     * The statement updating the specified documents. The documents must exist, and their versions must have already
+     * been checked before the statement is executed.
+     */
+    val updateSql: (Int) -> String = cached { count ->
+        """
+            INSERT INTO $tableName ($PARTITION_HASH, $PARTITION_KEY, $SORT_KEY, $VERSION, $BODY, $DELETED)
+            VALUES ${rows("(?, ?, ?, ?, ?, FROM_UNIXTIME(?))", count)}
+            ON DUPLICATE KEY UPDATE $VERSION = VALUES($VERSION), $BODY = VALUES($BODY), $DELETED = VALUES($DELETED)
+        """.trimIndent()
+    }
+
+    //endregion
+
+    //region insert
+
+    /**
+     * The statement creating the specified documents. It fails if any key already exists, whether it is the primary
+     * key or another unique index.
+     */
+    val insertSql: (Int) -> String = cached { count ->
+        """
+            INSERT INTO $tableName ($PARTITION_HASH, $PARTITION_KEY, $SORT_KEY, $VERSION, $BODY, $DELETED)
+            VALUES ${rows("(?, ?, ?, ?, ?, FROM_UNIXTIME(?))", count)}
+        """.trimIndent()
+    }
+    
     // The rows of a statement are separated by commas
     private fun rows(row: String, count: Int): String =
         generateSequence { row }.take(count).joinToString(separator = ", ")

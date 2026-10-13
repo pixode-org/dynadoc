@@ -6,6 +6,7 @@ import io.r2dbc.spi.R2dbcException
 import io.r2dbc.spi.Statement
 import java.time.Clock
 import java.time.Duration
+import kotlin.sequences.map
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.emitAll
@@ -101,12 +102,8 @@ class TiDbDocumentStore(
             try {
                 connection.createStatement("BEGIN OPTIMISTIC").rowsUpdated()
 
-                // Reading the documents for update makes the commit fail if a concurrent transaction modifies any
-                // of them
-                val versions: Map<DocumentKey, Long> =
-                    connection.createStatement(table.selectVersionsSql(updatedDocuments.size + checkedDocuments.size))
-                        .apply { bindKeys(documents.map { it.id }) }
-                        .readVersions()
+                // Selecting for update makes the commit fail if a concurrent transaction modifies any of the documents
+                val versions: Map<DocumentKey, Long> = connection.readVersions(documents.map { it.id }.toList())
 
                 documents.firstOrNull { (versions[it.id] ?: 0) != it.version }?.let { conflict ->
                     throw UpdateConflictException(conflict.id)
@@ -114,16 +111,16 @@ class TiDbDocumentStore(
 
                 // A checked document that doesn't exist can't be read for update, so it is written as a placeholder
                 // with a version of 0, which makes the commit fail if a concurrent transaction creates it
-                val upsert: List<Document> =
+                val writtenDocuments: List<Document> =
                     updatedDocuments.map { it.copy(version = it.version + 1) } +
                     checkedDocuments.filter { it.id !in versions }.map { Document(it.id, null, 0) }
 
-                val (existing, new) = upsert.partition { it.id in versions }
+                val (existing, new) = writtenDocuments.partition { it.id in versions }
                 if (new.isNotEmpty()) {
                     connection.insertMultipleDocuments(new).rowsUpdated()
                 }
                 if (existing.isNotEmpty()) {
-                    connection.upsertMultipleDocuments(existing).rowsUpdated()
+                    connection.updateMultipleDocuments(existing).rowsUpdated()
                 }
 
                 connection.createStatement("COMMIT").rowsUpdated()
@@ -143,11 +140,14 @@ class TiDbDocumentStore(
         }
     }
 
-    private suspend fun Statement.readVersions(): Map<DocumentKey, Long> = execute()
-        .awaitSingle()
-        .map { row -> RowMapper.toDocumentKey(row) to RowMapper.toVersion(row) }
-        .asFlow()
-        .fold(mutableMapOf()) { versions, (id, version) -> versions.also { it[id] = version } }
+    private suspend fun Connection.readVersions(ids: List<DocumentKey>): Map<DocumentKey, Long> =
+        createStatement(table.selectVersionsSql(ids.size))
+            .apply { bindKeys(ids) }
+            .execute()
+            .awaitSingle()
+            .map { row -> RowMapper.toDocumentKey(row) to RowMapper.toVersion(row) }
+            .asFlow()
+            .fold(mutableMapOf()) { versions, (id, version) -> versions.also { it[id] = version } }
 
     private fun Connection.insertSingleDocument(document: Document): Statement =
         insertMultipleDocuments(listOf(document.copy(version = 1)))
@@ -156,7 +156,7 @@ class TiDbDocumentStore(
         createStatement(table.insertSql(documents.size)).bindDocuments(documents)
 
     private fun Connection.updateSingleDocument(document: Document, body: String?, deleted: Long?): Statement =
-        createStatement(table.updateSql)
+        createStatement(table.updateSingleSql)
             .bindNullable(0, body, String::class.java)
             .bindNullable(1, deleted, Long::class.javaObjectType)
             .bind(2, partitionHash(document.id.partitionKey))
@@ -164,8 +164,8 @@ class TiDbDocumentStore(
             .bind(4, document.id.sortKey)
             .bind(5, document.version + 1)
 
-    private fun Connection.upsertMultipleDocuments(documents: List<Document>): Statement =
-        createStatement(table.upsertSql(documents.size)).bindDocuments(documents)
+    private fun Connection.updateMultipleDocuments(documents: List<Document>): Statement =
+        createStatement(table.updateSql(documents.size)).bindDocuments(documents)
 
     private fun Statement.bindDocuments(documents: List<Document>): Statement = apply {
         val expirationTime = expirationTime()
@@ -216,7 +216,7 @@ class TiDbDocumentStore(
 
         val documents: Map<DocumentKey, Document> = withConnection { connection ->
             connection.createStatement(table.selectDocumentsSql(distinctIds.size))
-                .apply { bindKeys(distinctIds.asSequence()) }
+                .apply { bindKeys(distinctIds) }
                 .asDocuments()
                 .toList()
                 .associateBy { it.id }
@@ -227,7 +227,7 @@ class TiDbDocumentStore(
         }
     }
 
-    private fun Statement.bindKeys(ids: Sequence<DocumentKey>) {
+    private fun Statement.bindKeys(ids: List<DocumentKey>) {
         var index = 0
 
         for ((partitionKey, sortKey) in ids) {
@@ -332,10 +332,8 @@ private const val LOCK_WAIT_TIMEOUT = 1205
 private const val DEADLOCK = 1213
 private const val WRITE_CONFLICT = 9007
 
-private val conflictCodes: Set<Int> =
-    setOf(LOCK_WAIT_TIMEOUT, DEADLOCK, WRITE_CONFLICT)
-
-private val primaryKeyViolationMessage = Regex("""for key '(?:[^']*\.)?PRIMARY'\s*$""")
+private val conflictCodes: Set<Int> = setOf(LOCK_WAIT_TIMEOUT, DEADLOCK, WRITE_CONFLICT)
+private val primaryKeyViolationMessage = Regex("""^Duplicate entry .* for key '(?:[^']*\.)?PRIMARY'$""")
 
 /**
  * Returns whether the error is a duplicate entry for the primary key, as opposed to another unique index.
