@@ -326,6 +326,10 @@ class TiDbDocumentStoreTests {
         assertDocument(document, specialId, json, 2)
     }
 
+    //endregion
+
+    //region updateDocuments: Unique constraints
+
     @Test
     fun updateDocuments_uniqueIndexViolationInsertSingleDocument() = runBlocking {
         val uniqueValue = UUID.randomUUID().toString()

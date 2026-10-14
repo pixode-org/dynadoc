@@ -260,6 +260,8 @@ class DynamoDbDocumentStore(
 
     //endregion
 
+    //region query and scan
+
     fun query(queryRequest: QueryRequest.Builder.() -> Unit): Flow<Document> = flow {
         val request = QueryRequest {
             tableName = this@DynamoDbDocumentStore.tableName
@@ -304,6 +306,10 @@ class DynamoDbDocumentStore(
         } while (startKey != null)
     }
 
+    //endregion
+
+    //region createTable
+
     suspend fun createTable(configure: CreateTableRequest.Builder.() -> Unit = { }) {
         client.createTable {
             tableName = this@DynamoDbDocumentStore.tableName
@@ -331,4 +337,6 @@ class DynamoDbDocumentStore(
             configure()
         }
     }
+
+    //endregion
 }

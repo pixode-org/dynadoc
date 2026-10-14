@@ -6,7 +6,6 @@ import io.r2dbc.spi.R2dbcException
 import io.r2dbc.spi.Statement
 import java.time.Clock
 import java.time.Duration
-import kotlin.sequences.map
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.emitAll
@@ -82,7 +81,7 @@ class TiDbDocumentStore(
                 }
             }
         } catch (exception: R2dbcException) {
-            // The document has been created or written by a concurrent transaction
+            // The document has been created or updated by a concurrent transaction
             if (exception.isConflict()) {
                 throw UpdateConflictException(document.id)
             } else {
@@ -142,7 +141,7 @@ class TiDbDocumentStore(
 
     private suspend fun Connection.readVersions(ids: List<DocumentKey>): Map<DocumentKey, Long> =
         createStatement(table.selectVersionsSql(ids.size))
-            .apply { bindKeys(ids) }
+            .bindKeys(ids)
             .execute()
             .awaitSingle()
             .map { row -> RowMapper.toDocumentKey(row) to RowMapper.toVersion(row) }
@@ -157,8 +156,8 @@ class TiDbDocumentStore(
 
     private fun Connection.updateSingleDocument(document: Document, body: String?, deleted: Long?): Statement =
         createStatement(table.updateSingleSql)
-            .bindNullable(0, body, String::class.java)
-            .bindNullable(1, deleted, Long::class.javaObjectType)
+            .bindNullable(0, body)
+            .bindNullable(1, deleted)
             .bind(2, partitionHash(document.id.partitionKey))
             .bind(3, document.id.partitionKey)
             .bind(4, document.id.sortKey)
@@ -166,6 +165,16 @@ class TiDbDocumentStore(
 
     private fun Connection.updateMultipleDocuments(documents: List<Document>): Statement =
         createStatement(table.updateSql(documents.size)).bindDocuments(documents)
+
+    private fun Statement.bindKeys(ids: List<DocumentKey>) = apply {
+        var index = 0
+
+        for ((partitionKey, sortKey) in ids) {
+            bind(index++, partitionHash(partitionKey))
+            bind(index++, partitionKey)
+            bind(index++, sortKey)
+        }
+    }
 
     private fun Statement.bindDocuments(documents: List<Document>): Statement = apply {
         val expirationTime = expirationTime()
@@ -176,16 +185,19 @@ class TiDbDocumentStore(
             bind(index++, id.partitionKey)
             bind(index++, id.sortKey)
             bind(index++, version)
-            bindNullable(index++, fromBody(body), String::class.java)
+            bindNullable(index++, fromBody(body))
 
             val deleted: Long? = when {
                 body != null -> null
                 version == 0L -> 1L
                 else -> expirationTime
             }
-            bindNullable(index++, deleted, Long::class.javaObjectType)
+            bindNullable(index++, deleted)
         }
     }
+
+    private inline fun <reified T : Any> Statement.bindNullable(index: Int, value: T?): Statement =
+        if (value == null) bindNull(index, T::class.java) else bind(index, value)
 
     private fun fromBody(body: JsonElement?): String? {
         require(body == null || body is JsonObject) { "The document must be a valid JSON object" }
@@ -193,9 +205,6 @@ class TiDbDocumentStore(
     }
 
     private fun expirationTime(): Long = (clock.instant() + expiration).epochSecond
-
-    private fun <T : Any> Statement.bindNullable(index: Int, value: T?, type: Class<T>): Statement =
-        if (value == null) bindNull(index, type) else bind(index, value)
 
     //endregion
 
@@ -216,7 +225,7 @@ class TiDbDocumentStore(
 
         val documents: Map<DocumentKey, Document> = withConnection { connection ->
             connection.createStatement(table.selectDocumentsSql(distinctIds.size))
-                .apply { bindKeys(distinctIds) }
+                .bindKeys(distinctIds)
                 .asDocuments()
                 .toList()
                 .associateBy { it.id }
@@ -224,16 +233,6 @@ class TiDbDocumentStore(
 
         for (id in idList) {
             emit(documents[id] ?: Document(id, null, 0))
-        }
-    }
-
-    private fun Statement.bindKeys(ids: List<DocumentKey>) {
-        var index = 0
-
-        for ((partitionKey, sortKey) in ids) {
-            bind(index++, partitionHash(partitionKey))
-            bind(index++, partitionKey)
-            bind(index++, sortKey)
         }
     }
 
@@ -269,6 +268,8 @@ class TiDbDocumentStore(
 
         return query("$conditions ORDER BY $SORT_KEY $order", *values.toTypedArray())
     }
+
+    //endregion
 
     //region query
 

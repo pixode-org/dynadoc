@@ -67,10 +67,6 @@ class TiDbTable(table: String) {
         """.trimIndent()
     }
 
-    //endregion
-
-    //region insert
-
     /**
      * The statement creating the specified documents. It fails if any key already exists, whether it is the primary
      * key or another unique index.
