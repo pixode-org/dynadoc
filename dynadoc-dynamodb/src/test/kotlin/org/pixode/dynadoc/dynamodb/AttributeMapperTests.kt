@@ -14,6 +14,7 @@ import org.junit.jupiter.params.provider.ValueSource
 import org.pixode.dynadoc.core.Document
 import org.pixode.dynadoc.core.DocumentKey
 import org.pixode.dynadoc.core.parseDocument
+import org.pixode.dynadoc.test.assertDocument
 
 private val id: DocumentKey = DocumentKey("PK", "SK")
 
