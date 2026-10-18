@@ -56,14 +56,20 @@ class TiDbTable(table: String) {
     """.trimIndent()
 
     /**
-     * The statement updating the specified documents. The documents must exist, and their versions must have already
-     * been checked before the statement is executed.
+     * The statement updating the specified documents. The documents must exist, so that the `INSERT` results in a
+     * guaranteed conflict, and their versions must have already been checked before the statement is executed.
      */
     val updateSql: (Int) -> String = cached { count ->
         """
             INSERT INTO $tableName ($PARTITION_HASH, $PARTITION_KEY, $SORT_KEY, $VERSION, $BODY, $DELETED)
             VALUES ${rows("(?, ?, ?, ?, ?, FROM_UNIXTIME(?))", count)}
-            ON DUPLICATE KEY UPDATE $VERSION = VALUES($VERSION), $BODY = VALUES($BODY), $DELETED = VALUES($DELETED)
+            ON DUPLICATE KEY UPDATE
+                $PARTITION_HASH = VALUES($PARTITION_HASH),
+                $PARTITION_KEY = VALUES($PARTITION_KEY),
+                $SORT_KEY = VALUES($SORT_KEY),
+                $VERSION = VALUES($VERSION),
+                $BODY = VALUES($BODY),
+                $DELETED = VALUES($DELETED)
         """.trimIndent()
     }
 
