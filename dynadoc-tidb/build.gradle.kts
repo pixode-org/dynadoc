@@ -2,8 +2,8 @@ dependencies {
     api(project(":dynadoc"))
     api("io.r2dbc:r2dbc-spi:1.0.0.RELEASE")
     implementation("org.jetbrains.kotlinx:kotlinx-serialization-json:1.11.0")
-    implementation("org.jetbrains.kotlinx:kotlinx-coroutines-core:1.10.2")
-    implementation("org.jetbrains.kotlinx:kotlinx-coroutines-reactive:1.10.2")
+    implementation("org.jetbrains.kotlinx:kotlinx-coroutines-core:1.11.0")
+    implementation("org.jetbrains.kotlinx:kotlinx-coroutines-reactive:1.11.0")
 
     testImplementation(project(":dynadoc-test"))
     testImplementation(kotlin("test"))

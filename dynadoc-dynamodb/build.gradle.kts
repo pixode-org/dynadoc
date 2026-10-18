@@ -2,7 +2,7 @@ dependencies {
     api(project(":dynadoc"))
     api("aws.sdk.kotlin:dynamodb-jvm:[1.3.0, 2[")
     implementation("org.jetbrains.kotlinx:kotlinx-serialization-json:1.11.0")
-    implementation("org.jetbrains.kotlinx:kotlinx-coroutines-core:1.10.2")
+    implementation("org.jetbrains.kotlinx:kotlinx-coroutines-core:1.11.0")
 
     testImplementation(project(":dynadoc-test"))
     testImplementation(kotlin("test"))
