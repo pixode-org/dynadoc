@@ -8,6 +8,7 @@ import java.time.Clock
 import java.time.Duration
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.associate
 import kotlinx.coroutines.flow.emitAll
 import kotlinx.coroutines.flow.emptyFlow
 import kotlinx.coroutines.flow.filter
@@ -146,7 +147,7 @@ class TiDbDocumentStore(
             .awaitSingle()
             .map { row -> RowMapper.toDocumentKey(row) to RowMapper.toVersion(row) }
             .asFlow()
-            .fold(mutableMapOf()) { versions, (id, version) -> versions.also { it[id] = version } }
+            .associate { it }
 
     private fun Connection.insertSingleDocument(document: Document): Statement =
         insertMultipleDocuments(listOf(document.copy(version = 1)))

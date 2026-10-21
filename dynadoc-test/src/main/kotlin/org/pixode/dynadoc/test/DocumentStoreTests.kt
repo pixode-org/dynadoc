@@ -11,6 +11,7 @@ import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.assertThrows
 import org.junit.jupiter.params.ParameterizedTest
 import org.junit.jupiter.params.provider.Arguments
+import org.junit.jupiter.params.provider.CsvSource
 import org.junit.jupiter.params.provider.MethodSource
 import org.junit.jupiter.params.provider.ValueSource
 import org.pixode.dynadoc.core.Document
@@ -269,14 +270,13 @@ abstract class DocumentStoreTests {
     //region updateDocuments: Conflict
 
     @ParameterizedTest
-    @ValueSource(booleans = [true, false])
-    fun updateDocuments_conflictDocumentDoesNotExist(checkOnly: Boolean) = runBlocking {
+    @CsvSource(
+        "CHECK",
+        "UPDATE",
+    )
+    fun updateDocuments_singleDocumentConflict_missingDocument(mode: UpdateMode) = runBlocking {
         val exception = assertThrows<UpdateConflictException> {
-            if (checkOnly) {
-                checkDocument(10)
-            } else {
-                updateDocument(JSON_1, 10)
-            }
+            updateDocumentWithConflict(mode, 10)
         }
 
         val document = store.getDocument(ids[0])
@@ -286,92 +286,35 @@ abstract class DocumentStoreTests {
     }
 
     @ParameterizedTest
-    @ValueSource(booleans = [true, false])
-    fun updateDocuments_conflictWrongVersion(checkOnly: Boolean) = runBlocking {
-        updateDocument(JSON_1, 0)
-
-        val exception = assertThrows<UpdateConflictException> {
-            if (checkOnly) {
-                checkDocument(10)
-            } else {
-                updateDocument(JSON_2, 10)
-            }
-        }
-
-        val document = store.getDocument(ids[0])
-
-        assertDocument(document, ids[0], JSON_1, 1)
-        assertEquals(ids[0], exception.id)
-    }
-
-    @ParameterizedTest
-    @ValueSource(booleans = [true, false])
-    fun updateDocuments_conflictDocumentAlreadyExists(checkOnly: Boolean) = runBlocking {
-        updateDocument(JSON_1, 0)
-
-        val exception = assertThrows<UpdateConflictException> {
-            if (checkOnly) {
-                checkDocument(0)
-            } else {
-                updateDocument(JSON_2, 0)
-            }
-        }
-
-        val document = store.getDocument(ids[0])
-
-        assertDocument(document, ids[0], JSON_1, 1)
-        assertEquals(ids[0], exception.id)
-    }
-
-    @Test
-    fun updateDocuments_conflictDeletedDocument() = runBlocking {
-        updateDocument(JSON_1, 0)
-        updateDocument(null, 1)
-
-        val exception = assertThrows<UpdateConflictException> {
-            updateDocument(JSON_2, 0)
-        }
-
-        val document = store.getDocument(ids[0])
-
-        assertDocument(document, ids[0], null, 2)
-        assertEquals(ids[0], exception.id)
-    }
-
-    @ParameterizedTest
-    @ValueSource(
-        strings = [
-            "updatedDoesNotExist",
-            "updatedWrongVersion",
-            "checkedDoesNotExist",
-            "checkedAlreadyExists",
-        ],
+    @CsvSource(
+        "CHECK,  10",
+        "CHECK,  0",
+        "UPDATE, 10",
+        "UPDATE, 0",
     )
-    fun updateDocuments_multipleDocumentsConflict(mode: String) = runBlocking {
+    fun updateDocuments_singleDocumentConflict_existingDocument(mode: UpdateMode, version: Long) = runBlocking {
+        updateDocument(JSON_1, 0)
+
+        val exception = assertThrows<UpdateConflictException> {
+            updateDocumentWithConflict(mode, version)
+        }
+
+        val document = store.getDocument(ids[0])
+
+        assertDocument(document, ids[0], JSON_1, 1)
+        assertEquals(ids[0], exception.id)
+    }
+
+    @ParameterizedTest
+    @CsvSource(
+        "CHECK",
+        "UPDATE",
+    )
+    fun updateDocuments_multipleDocumentsConflict_missingDocument(mode: UpdateMode) = runBlocking {
         updateDocument(ids[0], JSON_1, 0)
 
         val exception = assertThrows<UpdateConflictException> {
-            when (mode) {
-                "updatedDoesNotExist" -> store.updateDocuments(
-                    parseDocument(ids[0], JSON_2, 1),
-                    parseDocument(ids[1], JSON_3, 10),
-                )
-
-                "updatedWrongVersion" -> store.updateDocuments(
-                    parseDocument(ids[0], JSON_2, 10),
-                    parseDocument(ids[1], JSON_3, 0),
-                )
-
-                "checkedDoesNotExist" -> store.updateDocuments(
-                    updatedDocuments = listOf(parseDocument(ids[0], JSON_2, 1)),
-                    checkedDocuments = listOf(parseDocument(ids[1], JSON_3, 10)),
-                )
-
-                else -> store.updateDocuments(
-                    updatedDocuments = listOf(parseDocument(ids[1], JSON_2, 0)),
-                    checkedDocuments = listOf(parseDocument(ids[0], JSON_3, 0)),
-                )
-            }
+            updateDocumentsWithConflict(mode, 10)
         }
 
         val document1 = store.getDocument(ids[0])
@@ -379,11 +322,51 @@ abstract class DocumentStoreTests {
 
         assertDocument(document1, ids[0], JSON_1, 1)
         assertDocument(document2, ids[1], null, 0)
-        when (mode) {
-            "updatedDoesNotExist", "checkedDoesNotExist" -> assertEquals(ids[1], exception.id)
-            else -> assertEquals(ids[0], exception.id)
-        }
+        assertEquals(ids[1], exception.id)
     }
+
+    @ParameterizedTest
+    @CsvSource(
+        "CHECK,  10",
+        "CHECK,  0",
+        "UPDATE, 10",
+        "UPDATE, 0",
+    )
+    fun updateDocuments_multipleDocumentsConflict_existingDocument(mode: UpdateMode, version: Long) = runBlocking {
+        updateDocument(ids[0], JSON_1, 0)
+        updateDocument(ids[1], JSON_2, 0)
+
+        val exception = assertThrows<UpdateConflictException> {
+            updateDocumentsWithConflict(mode, version)
+        }
+
+        val document1 = store.getDocument(ids[0])
+        val document2 = store.getDocument(ids[1])
+
+        assertDocument(document1, ids[0], JSON_1, 1)
+        assertDocument(document2, ids[1], JSON_2, 1)
+        assertEquals(ids[1], exception.id)
+    }
+
+    private suspend fun updateDocumentWithConflict(mode: UpdateMode, version: Long) =
+        if (mode == UpdateMode.CHECK) {
+            checkDocument(version)
+        } else {
+            updateDocument(JSON_2, version)
+        }
+
+    private suspend fun updateDocumentsWithConflict(mode: UpdateMode, version: Long) =
+        if (mode == UpdateMode.CHECK) {
+            store.updateDocuments(
+                updatedDocuments = listOf(parseDocument(ids[0], JSON_3, 1)),
+                checkedDocuments = listOf(parseDocument(ids[1], JSON_4, version)),
+            )
+        } else {
+            store.updateDocuments(
+                parseDocument(ids[0], JSON_3, 1),
+                parseDocument(ids[1], JSON_4, version),
+            )
+        }
 
     //endregion
 
@@ -613,4 +596,9 @@ abstract class DocumentStoreTests {
         )
 
     //endregion
+}
+
+enum class UpdateMode {
+    CHECK,
+    UPDATE,
 }
